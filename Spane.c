@@ -6,6 +6,10 @@
 #include <string.h>
 #include <unistd.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <pthread.h>
 
 #define MAIN_WINDOW_WIDTH  1000
 #define MAIN_WINDOW_HEIGHT 700
@@ -20,76 +24,142 @@
 #define MAP_HEIGHT    18
 #define PLAYER_SPEED  5
 
-// Color definitions
-typedef struct {
-    unsigned long black;
-    unsigned long white;
-    unsigned long gray;
-    unsigned long light_gray;
-    unsigned long dark_gray;
-    unsigned long blue;
-    unsigned long green;
-    unsigned long red;
-    unsigned long yellow;
-    unsigned long orange;
-    unsigned long purple;
-} Colors;
+#define WEB_PORT 3000
 
-// Forward declarations
+// 5x7 bitmap font (ASCII 32-126)
+static const unsigned char font_5x7[][5] = {
+    {0x00,0x00,0x00,0x00,0x00},{0x00,0x00,0x5f,0x00,0x00},{0x00,0x07,0x00,0x07,0x00},
+    {0x14,0x7f,0x14,0x7f,0x14},{0x24,0x2a,0x7f,0x2a,0x12},{0x23,0x13,0x08,0x64,0x62},
+    {0x36,0x49,0x55,0x22,0x50},{0x00,0x05,0x03,0x00,0x00},{0x00,0x1c,0x22,0x41,0x00},
+    {0x00,0x41,0x22,0x1c,0x00},{0x08,0x2a,0x1c,0x2a,0x08},{0x08,0x08,0x3e,0x08,0x08},
+    {0x00,0x50,0x30,0x00,0x00},{0x08,0x08,0x08,0x08,0x08},{0x00,0x60,0x60,0x00,0x00},
+    {0x20,0x10,0x08,0x04,0x02},{0x3e,0x51,0x49,0x45,0x3e},{0x00,0x42,0x7f,0x40,0x00},
+    {0x42,0x61,0x51,0x49,0x46},{0x21,0x41,0x45,0x4b,0x31},{0x18,0x14,0x12,0x7f,0x10},
+    {0x27,0x45,0x45,0x45,0x39},{0x3c,0x4a,0x49,0x49,0x30},{0x01,0x71,0x09,0x05,0x03},
+    {0x36,0x49,0x49,0x49,0x36},{0x06,0x49,0x49,0x29,0x1e},{0x00,0x36,0x36,0x00,0x00},
+    {0x00,0x56,0x36,0x00,0x00},{0x00,0x08,0x14,0x22,0x41},{0x14,0x14,0x14,0x14,0x14},
+    {0x41,0x22,0x14,0x08,0x00},{0x02,0x01,0x51,0x09,0x06},{0x32,0x49,0x79,0x41,0x3e},
+    {0x7e,0x11,0x11,0x11,0x7e},{0x7f,0x49,0x49,0x49,0x36},{0x3e,0x41,0x41,0x41,0x22},
+    {0x7f,0x41,0x41,0x22,0x1c},{0x7f,0x49,0x49,0x49,0x41},{0x7f,0x09,0x09,0x01,0x01},
+    {0x3e,0x41,0x41,0x51,0x32},{0x7f,0x08,0x08,0x08,0x7f},{0x00,0x41,0x7f,0x41,0x00},
+    {0x20,0x40,0x41,0x3f,0x01},{0x7f,0x08,0x14,0x22,0x41},{0x7f,0x40,0x40,0x40,0x40},
+    {0x7f,0x02,0x04,0x02,0x7f},{0x7f,0x04,0x08,0x10,0x7f},{0x3e,0x41,0x41,0x41,0x3e},
+    {0x7f,0x09,0x09,0x09,0x06},{0x3e,0x41,0x51,0x21,0x5e},{0x7f,0x09,0x19,0x29,0x46},
+    {0x46,0x49,0x49,0x49,0x31},{0x01,0x01,0x7f,0x01,0x01},{0x3f,0x40,0x40,0x40,0x3f},
+    {0x1f,0x20,0x40,0x20,0x1f},{0x7f,0x20,0x18,0x20,0x7f},{0x63,0x14,0x08,0x14,0x63},
+    {0x03,0x04,0x78,0x04,0x03},{0x61,0x51,0x49,0x45,0x43},{0x00,0x00,0x7f,0x41,0x41},
+    {0x02,0x04,0x08,0x10,0x20},{0x41,0x41,0x7f,0x00,0x00},{0x04,0x02,0x01,0x02,0x04},
+    {0x40,0x40,0x40,0x40,0x40},{0x00,0x01,0x02,0x04,0x00},{0x20,0x54,0x54,0x54,0x78},
+    {0x7f,0x48,0x44,0x44,0x38},{0x38,0x44,0x44,0x44,0x20},{0x38,0x44,0x44,0x48,0x7f},
+    {0x38,0x54,0x54,0x54,0x18},{0x08,0x7e,0x09,0x01,0x02},{0x08,0x14,0x54,0x54,0x3c},
+    {0x7f,0x08,0x04,0x04,0x78},{0x00,0x44,0x7d,0x40,0x00},{0x20,0x40,0x44,0x3d,0x00},
+    {0x00,0x7f,0x10,0x28,0x44},{0x00,0x41,0x7f,0x40,0x00},{0x7c,0x04,0x18,0x04,0x78},
+    {0x7c,0x08,0x04,0x04,0x78},{0x38,0x44,0x44,0x44,0x38},{0x7c,0x14,0x14,0x14,0x08},
+    {0x08,0x14,0x14,0x18,0x7c},{0x7c,0x08,0x04,0x04,0x08},{0x48,0x54,0x54,0x54,0x20},
+    {0x04,0x3f,0x44,0x40,0x20},{0x3c,0x40,0x40,0x20,0x7c},{0x1c,0x20,0x40,0x20,0x1c},
+    {0x3c,0x40,0x30,0x40,0x3c},{0x44,0x28,0x10,0x28,0x44},{0x0c,0x50,0x50,0x50,0x3c},
+    {0x44,0x64,0x54,0x4c,0x44},{0x00,0x08,0x36,0x41,0x00},{0x00,0x00,0x7f,0x00,0x00},
+    {0x00,0x41,0x36,0x08,0x00},{0x08,0x08,0x2a,0x1c,0x08}
+};
+
 typedef struct Game Game;
 typedef struct GameManager GameManager;
 
-// Game interface - each game must implement these functions
+// THE framebuffer - single source of truth for all rendering
+typedef struct {
+    unsigned char pixels[MAIN_WINDOW_WIDTH * MAIN_WINDOW_HEIGHT * 4];
+} Framebuffer;
+
 struct Game {
     char name[32];
-    void* data;  // Game-specific data
+    void* data;
     int active;
-    
-    // Function pointers for game interface
-    void (*init)(Game* game, Display* d, Window w, GC gc, Colors* colors);
-    void (*handle_event)(Game* game, XEvent* e);
+    void (*init)(Game* game);
+    void (*handle_key)(Game* game, int key_code, int pressed);
+    void (*handle_click)(Game* game, int x, int y);
     void (*update)(Game* game);
-    void (*render)(Game* game, Display* d, Window w, GC gc);
+    void (*render)(Game* game, Framebuffer* fb);
     void (*cleanup)(Game* game);
 };
 
-// Game Manager structure
 struct GameManager {
-    Display* display;
-    Window main_window;
-    Window game_area_window;  // Sub-window for game rendering
-    GC gc;
-    Colors colors;
-    
-    Game* games[5];  // Array of game pointers
+    // Engine state (runs headless)
+    Framebuffer framebuffer;
+    Game* games[5];
     int game_count;
     int current_game;
-    
-    // UI state
-    int button_states[5];  // For tracking button presses
     int hover_button;
-    
-    // FPS tracking
+    int mouse_x, mouse_y;
     int frame_count;
     time_t last_fps_update;
     double fps;
+    pthread_mutex_t fb_mutex;
+    
+    // X11 mirror (just displays framebuffer)
+    Display* display;
+    Window window;
+    GC gc;
+    XImage* ximage;
+    int x11_running;
+    
+    // Web mirror
+    int web_mode;
 };
 
 // ============================================
-// RPG GAME IMPLEMENTATION
+// FRAMEBUFFER PRIMITIVES (Headless rendering)
+// ============================================
+
+static inline void fb_pixel(Framebuffer* fb, int x, int y, unsigned char r, unsigned char g, unsigned char b) {
+    if (x < 0 || x >= MAIN_WINDOW_WIDTH || y < 0 || y >= MAIN_WINDOW_HEIGHT) return;
+    int i = (y * MAIN_WINDOW_WIDTH + x) * 4;
+    fb->pixels[i]=r; fb->pixels[i+1]=g; fb->pixels[i+2]=b; fb->pixels[i+3]=255;
+}
+
+static void fb_fill(Framebuffer* fb, int x, int y, int w, int h, unsigned char r, unsigned char g, unsigned char b) {
+    for (int dy=0; dy<h; dy++)
+        for (int dx=0; dx<w; dx++)
+            fb_pixel(fb, x+dx, y+dy, r, g, b);
+}
+
+static void fb_rect(Framebuffer* fb, int x, int y, int w, int h, unsigned char r, unsigned char g, unsigned char b) {
+    for (int dx=0; dx<w; dx++) { fb_pixel(fb,x+dx,y,r,g,b); fb_pixel(fb,x+dx,y+h-1,r,g,b); }
+    for (int dy=1; dy<h-1; dy++) { fb_pixel(fb,x,y+dy,r,g,b); fb_pixel(fb,x+w-1,y+dy,r,g,b); }
+}
+
+static void fb_circle(Framebuffer* fb, int cx, int cy, int r, unsigned char R, unsigned char G, unsigned char B) {
+    for (int dy=-r; dy<=r; dy++)
+        for (int dx=-r; dx<=r; dx++)
+            if (dx*dx+dy*dy <= r*r) fb_pixel(fb, cx+dx, cy+dy, R, G, B);
+}
+
+static void fb_char(Framebuffer* fb, int x, int y, char c, unsigned char r, unsigned char g, unsigned char b) {
+    if (c<32||c>126) return;
+    const unsigned char* glyph = font_5x7[c-32];
+    for (int row=0; row<7; row++)
+        for (int col=0; col<5; col++)
+            if (glyph[col] & (1<<row)) fb_pixel(fb, x+col, y+row, r, g, b);
+}
+
+static void fb_text(Framebuffer* fb, int x, int y, const char* s, unsigned char r, unsigned char g, unsigned char b) {
+    for (int i=0; s[i]; i++) fb_char(fb, x+i*6, y, s[i], r, g, b);
+}
+
+static void fb_text_center(Framebuffer* fb, int x, int y, int w, const char* s, unsigned char r, unsigned char g, unsigned char b) {
+    fb_text(fb, x+(w-(int)strlen(s)*6)/2, y, s, r, g, b);
+}
+
+// ============================================
+// RPG GAME (Headless rendering)
 // ============================================
 
 typedef struct {
     int map[18][25];
-    int player_x, player_y;
-    int player_dir;
-    int player_frame;
-    int moving;
-    int key_up, key_down, key_left, key_right;
+    int px, py, dir, frame, moving;
+    int ku,kd,kl,kr;
 } RPGData;
 
-// RPG map
-int rpg_map[18][25] = {
+static int rpg_map[18][25] = {
     {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
     {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
     {1,0,0,0,0,0,0,0,0,0,0,0,4,0,0,0,0,0,0,0,0,0,0,0,1},
@@ -110,794 +180,458 @@ int rpg_map[18][25] = {
     {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
 };
 
-static int rpg_is_walkable(RPGData* data, int x, int y) {
-    if (x < 0 || x >= MAP_WIDTH || y < 0 || y >= MAP_HEIGHT) return 0;
-    int t = data->map[y][x];
-    return (t == 0 || t == 3);
+static int rpg_walkable(RPGData* d, int x, int y) {
+    return (x>=0&&x<MAP_WIDTH&&y>=0&&y<MAP_HEIGHT&&(d->map[y][x]==0||d->map[y][x]==3));
 }
 
-static void rpg_draw_tile(Display* d, Window w, GC gc, int x, int y, int type, Colors* c) {
-    switch(type) {
-        case 0: XSetForeground(d, gc, 0x33AA33); break; // Grass
-        case 1: XSetForeground(d, gc, 0x666666); break; // Wall
-        case 2: XSetForeground(d, gc, 0x3355AA); break; // Water
-        case 3: XSetForeground(d, gc, 0xCCAA66); break; // Path
-        case 4: XSetForeground(d, gc, 0x226622); break; // Tree
-        case 5: XSetForeground(d, gc, 0x884422); break; // House
+static void rpg_tile(Framebuffer* fb, int x, int y, int t) {
+    unsigned char r,g,b;
+    switch(t) {
+        case 0: r=0x33;g=0xAA;b=0x33;break; case 1: r=0x66;g=0x66;b=0x66;break;
+        case 2: r=0x33;g=0x55;b=0xAA;break; case 3: r=0xCC;g=0xAA;b=0x66;break;
+        case 4: r=0x22;g=0x66;b=0x22;break; case 5: r=0x88;g=0x44;b=0x22;break;
+        default: r=g=b=0;
     }
-    
-    XFillRectangle(d, w, gc, x, y, TILE_SIZE, TILE_SIZE);
-    
-    if (type == 4) {
-        XSetForeground(d, gc, 0x00CC00);
-        XFillArc(d, w, gc, x-2, y-4, TILE_SIZE+4, 24, 0, 360*64);
-        XSetForeground(d, gc, 0x664422);
-        XFillRectangle(d, w, gc, x+13, y+16, 6, 16);
-    }
-    else if (type == 5) {
-        XSetForeground(d, gc, 0xCC3333);
-        XFillRectangle(d, w, gc, x+4, y+8, 24, 24);
-        XSetForeground(d, gc, 0x884422);
-        XPoint roof[3] = {{x+4, y+8}, {x+16, y-4}, {x+28, y+8}};
-        XFillPolygon(d, w, gc, roof, 3, Convex, CoordModeOrigin);
-    }
+    fb_fill(fb,x,y,TILE_SIZE,TILE_SIZE,r,g,b);
+    if(t==4){fb_circle(fb,x+16,y,TILE_SIZE/2+2,0x00,0xCC,0x00);fb_fill(fb,x+13,y+16,6,16,0x66,0x44,0x22);}
+    if(t==5){fb_fill(fb,x+4,y+8,24,24,0xCC,0x33,0x33);for(int i=0;i<12;i++)fb_fill(fb,x+12-i,y+8-i,i*2+4,1,0x88,0x44,0x22);}
 }
 
-static void rpg_draw_player(Display* d, Window w, GC gc, int px, int py, int dir, int frame) {
-    XSetForeground(d, gc, 0x3366FF);
-    XFillRectangle(d, w, gc, px+8, py+12, 16, 14);
-    
-    XSetForeground(d, gc, 0xFFCC99);
-    XFillArc(d, w, gc, px+8, py+2, 16, 16, 0, 360*64);
-    
-    XSetForeground(d, gc, 0x000000);
-    if (dir == 1) {
-        XFillRectangle(d, w, gc, px+9, py+8, 3, 3);
-    } else if (dir == 2) {
-        XFillRectangle(d, w, gc, px+20, py+8, 3, 3);
-    } else {
-        XFillRectangle(d, w, gc, px+12, py+8, 3, 3);
-        XFillRectangle(d, w, gc, px+19, py+8, 3, 3);
-    }
-    
-    XSetForeground(d, gc, 0x000088);
-    if (frame % 20 < 10) {
-        XFillRectangle(d, w, gc, px+9, py+26, 5, 8);
-        XFillRectangle(d, w, gc, px+18, py+26, 5, 8);
-    } else {
-        XFillRectangle(d, w, gc, px+10, py+26, 5, 8);
-        XFillRectangle(d, w, gc, px+17, py+26, 5, 8);
-    }
+static void rpg_player(Framebuffer* fb, int x, int y, int dir, int frame) {
+    fb_fill(fb,x+8,y+12,16,14,0x33,0x66,0xFF);
+    fb_circle(fb,x+16,y+10,8,0xFF,0xCC,0x99);
+    if(dir==1) fb_fill(fb,x+9,y+8,3,3,0,0,0);
+    else if(dir==2) fb_fill(fb,x+20,y+8,3,3,0,0,0);
+    else {fb_fill(fb,x+12,y+8,3,3,0,0,0);fb_fill(fb,x+19,y+8,3,3,0,0,0);}
+    if(frame%20<10){fb_fill(fb,x+9,y+26,5,8,0,0,0x88);fb_fill(fb,x+18,y+26,5,8,0,0,0x88);}
+    else{fb_fill(fb,x+10,y+26,5,8,0,0,0x88);fb_fill(fb,x+17,y+26,5,8,0,0,0x88);}
 }
 
-static void rpg_init(Game* game, Display* d, Window w, GC gc, Colors* colors) {
-    RPGData* data = (RPGData*)calloc(1, sizeof(RPGData));
-    memcpy(data->map, rpg_map, sizeof(rpg_map));
-    data->player_x = 5 * TILE_SIZE;
-    data->player_y = 5 * TILE_SIZE;
-    data->player_dir = 0;
-    data->player_frame = 0;
-    game->data = data;
-    printf("RPG Game initialized!\n");
+static void rpg_init(Game* g) {
+    RPGData* d=calloc(1,sizeof(RPGData));
+    memcpy(d->map,rpg_map,sizeof(rpg_map));
+    d->px=5*TILE_SIZE; d->py=5*TILE_SIZE;
+    g->data=d; printf("RPG ready\n");
 }
-
-static void rpg_handle_event(Game* game, XEvent* e) {
-    RPGData* data = (RPGData*)game->data;
-    
-    if (e->type == KeyPress) {
-        KeySym key = XLookupKeysym(&e->xkey, 0);
-        
-        if (key == XK_Up || key == XK_w || key == XK_W) {
-            data->key_up = 1;
-            data->player_dir = 3;
-        }
-        else if (key == XK_Down || key == XK_s || key == XK_S) {
-            data->key_down = 1;
-            data->player_dir = 0;
-        }
-        else if (key == XK_Left || key == XK_a || key == XK_A) {
-            data->key_left = 1;
-            data->player_dir = 1;
-        }
-        else if (key == XK_Right || key == XK_d || key == XK_D) {
-            data->key_right = 1;
-            data->player_dir = 2;
-        }
-    }
-    else if (e->type == KeyRelease) {
-        KeySym key = XLookupKeysym(&e->xkey, 0);
-        
-        if (key == XK_Up || key == XK_w || key == XK_W) data->key_up = 0;
-        else if (key == XK_Down || key == XK_s || key == XK_S) data->key_down = 0;
-        else if (key == XK_Left || key == XK_a || key == XK_A) data->key_left = 0;
-        else if (key == XK_Right || key == XK_d || key == XK_D) data->key_right = 0;
-    }
-    else if (e->type == ButtonPress) {
-        if (e->xbutton.button == Button1) {
-            // Check if click is within game area
-            if (e->xbutton.x >= GAME_AREA_X && e->xbutton.x < GAME_AREA_X + GAME_AREA_WIDTH &&
-                e->xbutton.y >= GAME_AREA_Y && e->xbutton.y < GAME_AREA_Y + GAME_AREA_HEIGHT) {
-                
-                int new_x = e->xbutton.x - GAME_AREA_X - 16;
-                int new_y = e->xbutton.y - GAME_AREA_Y - 16;
-                
-                if (rpg_is_walkable(data, new_x/TILE_SIZE, new_y/TILE_SIZE) &&
-                    rpg_is_walkable(data, (new_x+31)/TILE_SIZE, (new_y+31)/TILE_SIZE)) {
-                    data->player_x = new_x;
-                    data->player_y = new_y;
-                }
-            }
-        }
+static void rpg_key(Game* g, int k, int p) {
+    RPGData* d=g->data;
+    switch(k){
+        case 38:case 87: d->ku=p; if(p)d->dir=3; break;
+        case 40:case 83: d->kd=p; if(p)d->dir=0; break;
+        case 37:case 65: d->kl=p; if(p)d->dir=1; break;
+        case 39:case 68: d->kr=p; if(p)d->dir=2; break;
     }
 }
-
-static void rpg_update(Game* game) {
-    RPGData* data = (RPGData*)game->data;
-    
-    data->moving = 0;
-    int new_x = data->player_x;
-    int new_y = data->player_y;
-    
-    if (data->key_up)    { new_y -= PLAYER_SPEED; data->moving = 1; }
-    if (data->key_down)  { new_y += PLAYER_SPEED; data->moving = 1; }
-    if (data->key_left)  { new_x -= PLAYER_SPEED; data->moving = 1; }
-    if (data->key_right) { new_x += PLAYER_SPEED; data->moving = 1; }
-    
-    if (data->moving) {
-        if (rpg_is_walkable(data, new_x/TILE_SIZE, new_y/TILE_SIZE) &&
-            rpg_is_walkable(data, (new_x+31)/TILE_SIZE, new_y/TILE_SIZE) &&
-            rpg_is_walkable(data, new_x/TILE_SIZE, (new_y+31)/TILE_SIZE) &&
-            rpg_is_walkable(data, (new_x+31)/TILE_SIZE, (new_y+31)/TILE_SIZE)) {
-            data->player_x = new_x;
-            data->player_y = new_y;
-        }
-    }
-    
-    if (data->player_x < 0) data->player_x = 0;
-    if (data->player_y < 0) data->player_y = 0;
-    if (data->player_x > (MAP_WIDTH-1)*TILE_SIZE) data->player_x = (MAP_WIDTH-1)*TILE_SIZE;
-    if (data->player_y > (MAP_HEIGHT-1)*TILE_SIZE) data->player_y = (MAP_HEIGHT-1)*TILE_SIZE;
-    
-    if (data->moving) data->player_frame++;
-    else data->player_frame = 0;
-}
-
-static void rpg_render(Game* game, Display* d, Window w, GC gc) {
-    RPGData* data = (RPGData*)game->data;
-    Colors* c = NULL;  // Not used but available
-    
-    // Clear game area
-    XSetForeground(d, gc, 0x000000);
-    XFillRectangle(d, w, gc, GAME_AREA_X, GAME_AREA_Y, GAME_AREA_WIDTH, GAME_AREA_HEIGHT);
-    
-    // Draw map
-    for (int y = 0; y < MAP_HEIGHT; y++) {
-        for (int x = 0; x < MAP_WIDTH; x++) {
-            rpg_draw_tile(d, w, gc, 
-                         GAME_AREA_X + x*TILE_SIZE, 
-                         GAME_AREA_Y + y*TILE_SIZE, 
-                         data->map[y][x], c);
-        }
-    }
-    
-    // Draw player
-    rpg_draw_player(d, w, gc, 
-                   GAME_AREA_X + data->player_x, 
-                   GAME_AREA_Y + data->player_y, 
-                   data->player_dir, data->player_frame);
-    
-    // Draw game title and info
-    XSetForeground(d, gc, 0xFFFFFF);
-    char info[200];
-    snprintf(info, sizeof(info), 
-            "RPG Adventure - Pos: (%d,%d) - Arrow Keys/WASD to Move",
-            data->player_x/TILE_SIZE, data->player_y/TILE_SIZE);
-    XDrawString(d, w, gc, GAME_AREA_X + 10, GAME_AREA_Y + GAME_AREA_HEIGHT - 10, 
-               info, strlen(info));
-}
-
-static void rpg_cleanup(Game* game) {
-    if (game->data) {
-        free(game->data);
-        game->data = NULL;
+static void rpg_click(Game* g, int x, int y) {
+    RPGData* d=g->data;
+    if(x>=GAME_AREA_X&&x<GAME_AREA_X+GAME_AREA_WIDTH&&y>=GAME_AREA_Y&&y<GAME_AREA_Y+GAME_AREA_HEIGHT){
+        int nx=x-GAME_AREA_X-16, ny=y-GAME_AREA_Y-16;
+        if(rpg_walkable(d,nx/TILE_SIZE,ny/TILE_SIZE)&&rpg_walkable(d,(nx+31)/TILE_SIZE,(ny+31)/TILE_SIZE))
+            {d->px=nx;d->py=ny;}
     }
 }
+static void rpg_update(Game* g) {
+    RPGData* d=g->data; d->moving=0;
+    int nx=d->px, ny=d->py;
+    if(d->ku){ny-=PLAYER_SPEED;d->moving=1;}
+    if(d->kd){ny+=PLAYER_SPEED;d->moving=1;}
+    if(d->kl){nx-=PLAYER_SPEED;d->moving=1;}
+    if(d->kr){nx+=PLAYER_SPEED;d->moving=1;}
+    if(d->moving&&rpg_walkable(d,nx/TILE_SIZE,ny/TILE_SIZE)&&rpg_walkable(d,(nx+31)/TILE_SIZE,ny/TILE_SIZE)
+       &&rpg_walkable(d,nx/TILE_SIZE,(ny+31)/TILE_SIZE)&&rpg_walkable(d,(nx+31)/TILE_SIZE,(ny+31)/TILE_SIZE))
+        {d->px=nx;d->py=ny;}
+    if(d->px<0)d->px=0; if(d->py<0)d->py=0;
+    if(d->px>(MAP_WIDTH-1)*TILE_SIZE)d->px=(MAP_WIDTH-1)*TILE_SIZE;
+    if(d->py>(MAP_HEIGHT-1)*TILE_SIZE)d->py=(MAP_HEIGHT-1)*TILE_SIZE;
+    if(d->moving)d->frame++; else d->frame=0;
+}
+static void rpg_render(Game* g, Framebuffer* fb) {
+    RPGData* d=g->data;
+    fb_fill(fb,GAME_AREA_X,GAME_AREA_Y,GAME_AREA_WIDTH,GAME_AREA_HEIGHT,0,0,0);
+    for(int y=0;y<MAP_HEIGHT;y++)
+        for(int x=0;x<MAP_WIDTH;x++)
+            rpg_tile(fb,GAME_AREA_X+x*TILE_SIZE,GAME_AREA_Y+y*TILE_SIZE,d->map[y][x]);
+    rpg_player(fb,GAME_AREA_X+d->px,GAME_AREA_Y+d->py,d->dir,d->frame);
+    char s[200]; snprintf(s,sizeof(s),"RPG Adventure - Pos:(%d,%d) - ArrowKeys/WASD",d->px/TILE_SIZE,d->py/TILE_SIZE);
+    fb_text(fb,GAME_AREA_X+10,GAME_AREA_Y+GAME_AREA_HEIGHT-10,s,0xFF,0xFF,0xFF);
+}
+static void rpg_cleanup(Game* g) { free(g->data); }
 
 // ============================================
-// SNAKE GAME IMPLEMENTATION
+// SNAKE GAME (Headless rendering)
 // ============================================
 
-#define SNAKE_GRID_SIZE 20
-#define SNAKE_MAX_LENGTH 500
-#define SNAKE_AREA_WIDTH 800
-#define SNAKE_AREA_HEIGHT 600
-#define SNAKE_COLS (SNAKE_AREA_WIDTH / SNAKE_GRID_SIZE)
-#define SNAKE_ROWS (SNAKE_AREA_HEIGHT / SNAKE_GRID_SIZE)
+#define SG 20
+#define SML 500
+#define SAW 800
+#define SAH 600
+#define SNC (SAW/SG)
+#define SNR (SAH/SG)
 
+typedef struct {int x,y;} Pt;
 typedef struct {
-    int x, y;
-} Point;
-
-typedef struct {
-    Point snake[SNAKE_MAX_LENGTH];
-    int length;
-    int direction;  // 0=right, 1=down, 2=left, 3=up
-    int next_direction;
-    Point food;
-    int score;
-    int game_over;
-    int frame_count;
-    int speed;
+    Pt s[SML]; int len,dir,ndir,score,go,fc,spd; Pt food;
 } SnakeData;
 
-static void snake_spawn_food(SnakeData* data) {
-    int valid;
-    do {
-        valid = 1;
-        data->food.x = rand() % SNAKE_COLS;
-        data->food.y = rand() % SNAKE_ROWS;
-        
-        // Make sure food doesn't spawn on snake
-        for (int i = 0; i < data->length; i++) {
-            if (data->snake[i].x == data->food.x && data->snake[i].y == data->food.y) {
-                valid = 0;
-                break;
-            }
-        }
-    } while (!valid);
+static void sn_food(SnakeData* d) {
+    int v; do{v=1;d->food.x=rand()%SNC;d->food.y=rand()%SNR;
+        for(int i=0;i<d->len;i++) if(d->s[i].x==d->food.x&&d->s[i].y==d->food.y){v=0;break;}
+    }while(!v);
 }
-
-static void snake_init(Game* game, Display* d, Window w, GC gc, Colors* colors) {
-    SnakeData* data = (SnakeData*)calloc(1, sizeof(SnakeData));
-    
-    // Initialize snake in the middle
-    data->length = 3;
-    int start_x = SNAKE_COLS / 2;
-    int start_y = SNAKE_ROWS / 2;
-    
-    for (int i = 0; i < data->length; i++) {
-        data->snake[i].x = start_x - i;
-        data->snake[i].y = start_y;
-    }
-    
-    data->direction = 0;
-    data->next_direction = 0;
-    data->score = 0;
-    data->game_over = 0;
-    data->frame_count = 0;
-    data->speed = 10;
-    
-    snake_spawn_food(data);
-    game->data = data;
-    printf("Snake Game initialized!\n");
+static void sn_init(Game* g) {
+    SnakeData* d=calloc(1,sizeof(SnakeData)); d->len=3; int sx=SNC/2,sy=SNR/2;
+    for(int i=0;i<d->len;i++){d->s[i].x=sx-i;d->s[i].y=sy;}
+    d->spd=10; sn_food(d); g->data=d; printf("Snake ready\n");
 }
-
-static void snake_handle_event(Game* game, XEvent* e) {
-    SnakeData* data = (SnakeData*)game->data;
-    
-    if (e->type == KeyPress) {
-        KeySym key = XLookupKeysym(&e->xkey, 0);
-        
-        if (data->game_over) {
-            if (key == XK_r || key == XK_R) {
-                // Reset game
-                data->length = 3;
-                int start_x = SNAKE_COLS / 2;
-                int start_y = SNAKE_ROWS / 2;
-                for (int i = 0; i < data->length; i++) {
-                    data->snake[i].x = start_x - i;
-                    data->snake[i].y = start_y;
-                }
-                data->direction = 0;
-                data->next_direction = 0;
-                data->score = 0;
-                data->game_over = 0;
-                data->frame_count = 0;
-                snake_spawn_food(data);
-            }
-            return;
-        }
-        
-        switch(key) {
-            case XK_Up: case XK_w: case XK_W:
-                if (data->direction != 1) data->next_direction = 3;
-                break;
-            case XK_Down: case XK_s: case XK_S:
-                if (data->direction != 3) data->next_direction = 1;
-                break;
-            case XK_Left: case XK_a: case XK_A:
-                if (data->direction != 0) data->next_direction = 2;
-                break;
-            case XK_Right: case XK_d: case XK_D:
-                if (data->direction != 2) data->next_direction = 0;
-                break;
-        }
-    }
+static void sn_key(Game* g, int k, int p) {
+    SnakeData* d=g->data; if(!p)return;
+    if(d->go){if(k==82){d->len=3;int sx=SNC/2,sy=SNR/2;for(int i=0;i<d->len;i++){d->s[i].x=sx-i;d->s[i].y=sy;}
+        d->dir=0;d->ndir=0;d->score=0;d->go=0;d->fc=0;sn_food(d);}return;}
+    switch(k){case 38:case 87:if(d->dir!=1)d->ndir=3;break;case 40:case 83:if(d->dir!=3)d->ndir=1;break;
+        case 37:case 65:if(d->dir!=0)d->ndir=2;break;case 39:case 68:if(d->dir!=2)d->ndir=0;break;}
 }
-
-static void snake_update(Game* game) {
-    SnakeData* data = (SnakeData*)game->data;
-    
-    if (data->game_over) return;
-    
-    data->frame_count++;
-    if (data->frame_count < data->speed) return;
-    data->frame_count = 0;
-    
-    // Update direction
-    data->direction = data->next_direction;
-    
-    // Move snake
-    Point new_head = data->snake[0];
-    switch(data->direction) {
-        case 0: new_head.x++; break;
-        case 1: new_head.y++; break;
-        case 2: new_head.x--; break;
-        case 3: new_head.y--; break;
-    }
-    
-    // Check wall collision
-    if (new_head.x < 0 || new_head.x >= SNAKE_COLS ||
-        new_head.y < 0 || new_head.y >= SNAKE_ROWS) {
-        data->game_over = 1;
-        return;
-    }
-    
-    // Check self collision
-    for (int i = 0; i < data->length; i++) {
-        if (data->snake[i].x == new_head.x && data->snake[i].y == new_head.y) {
-            data->game_over = 1;
-            return;
-        }
-    }
-    
-    // Check food
-    int ate_food = (new_head.x == data->food.x && new_head.y == data->food.y);
-    
-    // Move body
-    for (int i = data->length - 1; i > 0; i--) {
-        data->snake[i] = data->snake[i-1];
-    }
-    data->snake[0] = new_head;
-    
-    if (ate_food) {
-        data->length++;
-        data->score += 10;
-        if (data->speed > 3) data->speed--;
-        snake_spawn_food(data);
-    }
+static void sn_click(Game* g, int x, int y) { (void)g;(void)x;(void)y; }
+static void sn_update(Game* g) {
+    SnakeData* d=g->data; if(d->go)return;
+    if(++d->fc<d->spd)return; d->fc=0; d->dir=d->ndir;
+    Pt nh=d->s[0]; switch(d->dir){case 0:nh.x++;break;case 1:nh.y++;break;case 2:nh.x--;break;case 3:nh.y--;break;}
+    if(nh.x<0||nh.x>=SNC||nh.y<0||nh.y>=SNR){d->go=1;return;}
+    for(int i=0;i<d->len;i++) if(d->s[i].x==nh.x&&d->s[i].y==nh.y){d->go=1;return;}
+    int ate=(nh.x==d->food.x&&nh.y==d->food.y);
+    for(int i=d->len-1;i>0;i--) d->s[i]=d->s[i-1]; d->s[0]=nh;
+    if(ate){d->len++;d->score+=10;if(d->spd>3)d->spd--;sn_food(d);}
 }
-
-static void snake_render(Game* game, Display* d, Window w, GC gc) {
-    SnakeData* data = (SnakeData*)game->data;
-    
-    // Clear game area
-    XSetForeground(d, gc, 0x1A1A2E);
-    XFillRectangle(d, w, gc, GAME_AREA_X, GAME_AREA_Y, SNAKE_AREA_WIDTH, SNAKE_AREA_HEIGHT);
-    
-    // Draw grid lines (subtle)
-    XSetForeground(d, gc, 0x252540);
-    for (int i = 0; i <= SNAKE_COLS; i++) {
-        XDrawLine(d, w, gc, 
-                 GAME_AREA_X + i * SNAKE_GRID_SIZE, GAME_AREA_Y,
-                 GAME_AREA_X + i * SNAKE_GRID_SIZE, GAME_AREA_Y + SNAKE_AREA_HEIGHT);
+static void sn_render(Game* g, Framebuffer* fb) {
+    SnakeData* d=g->data;
+    fb_fill(fb,GAME_AREA_X,GAME_AREA_Y,SAW,SAH,0x1A,0x1A,0x2E);
+    for(int i=0;i<=SNC;i++)fb_fill(fb,GAME_AREA_X+i*SG,GAME_AREA_Y,1,SAH,0x25,0x25,0x40);
+    for(int i=0;i<=SNR;i++)fb_fill(fb,GAME_AREA_X,GAME_AREA_Y+i*SG,SAW,1,0x25,0x25,0x40);
+    int fx=GAME_AREA_X+d->food.x*SG,fy=GAME_AREA_Y+d->food.y*SG;
+    fb_circle(fb,fx+SG/2,fy+SG/2,SG/2-2,0xFF,0x33,0x33);
+    for(int i=0;i<d->len;i++){
+        int sx=GAME_AREA_X+d->s[i].x*SG+1,sy=GAME_AREA_Y+d->s[i].y*SG+1;
+        fb_fill(fb,sx,sy,SG-2,SG-2,i==0?0x00:0x00,i==0?0xFF:0xAA,0x00);
     }
-    for (int i = 0; i <= SNAKE_ROWS; i++) {
-        XDrawLine(d, w, gc, 
-                 GAME_AREA_X, GAME_AREA_Y + i * SNAKE_GRID_SIZE,
-                 GAME_AREA_X + SNAKE_AREA_WIDTH, GAME_AREA_Y + i * SNAKE_GRID_SIZE);
-    }
-    
-    // Draw food
-    XSetForeground(d, gc, 0xFF3333);
-    XFillArc(d, w, gc, 
-            GAME_AREA_X + data->food.x * SNAKE_GRID_SIZE + 2,
-            GAME_AREA_Y + data->food.y * SNAKE_GRID_SIZE + 2,
-            SNAKE_GRID_SIZE - 4, SNAKE_GRID_SIZE - 4, 0, 360*64);
-    
-    // Draw snake
-    for (int i = 0; i < data->length; i++) {
-        if (i == 0) {
-            XSetForeground(d, gc, 0x00FF00);  // Head
-        } else {
-            XSetForeground(d, gc, 0x00AA00);  // Body
-        }
-        
-        XFillRectangle(d, w, gc,
-                      GAME_AREA_X + data->snake[i].x * SNAKE_GRID_SIZE + 1,
-                      GAME_AREA_Y + data->snake[i].y * SNAKE_GRID_SIZE + 1,
-                      SNAKE_GRID_SIZE - 2, SNAKE_GRID_SIZE - 2);
-    }
-    
-    // Draw score
-    XSetForeground(d, gc, 0xFFFFFF);
-    char score_text[50];
-    snprintf(score_text, sizeof(score_text), "Score: %d", data->score);
-    XDrawString(d, w, gc, GAME_AREA_X + 10, GAME_AREA_Y + 20, score_text, strlen(score_text));
-    
-    // Game over
-    if (data->game_over) {
-        XSetForeground(d, gc, 0x000000);
-        XFillRectangle(d, w, gc, 
-                      GAME_AREA_X + 250, GAME_AREA_Y + 250, 300, 100);
-        XSetForeground(d, gc, 0xFF0000);
-        char gameover_text[] = "GAME OVER!";
-        char restart_text[] = "Press R to restart";
-        XDrawString(d, w, gc, GAME_AREA_X + 320, GAME_AREA_Y + 280, 
-                   gameover_text, strlen(gameover_text));
-        XDrawString(d, w, gc, GAME_AREA_X + 310, GAME_AREA_Y + 310, 
-                   restart_text, strlen(restart_text));
-    }
-    
-    // Game info
-    XSetForeground(d, gc, 0x888888);
-    char info[100];
-    snprintf(info, sizeof(info), "Snake Game - Arrow Keys/WASD to Move - Length: %d", data->length);
-    XDrawString(d, w, gc, GAME_AREA_X + 10, GAME_AREA_Y + SNAKE_AREA_HEIGHT - 10, 
-               info, strlen(info));
+    char t[50]; snprintf(t,sizeof(t),"Score: %d",d->score);
+    fb_text(fb,GAME_AREA_X+10,GAME_AREA_Y+20,t,0xFF,0xFF,0xFF);
+    if(d->go){fb_fill(fb,GAME_AREA_X+250,GAME_AREA_Y+250,300,100,0,0,0);
+        fb_text(fb,GAME_AREA_X+340,GAME_AREA_Y+280,"GAME OVER!",0xFF,0,0);
+        fb_text(fb,GAME_AREA_X+320,GAME_AREA_Y+310,"Press R to restart",0xFF,0xFF,0xFF);}
+    snprintf(t,sizeof(t),"Snake - Arrows/WASD - Length:%d",d->len);
+    fb_text(fb,GAME_AREA_X+10,GAME_AREA_Y+SAH-10,t,0x88,0x88,0x88);
 }
+static void sn_cleanup(Game* g) { free(g->data); }
 
-static void snake_cleanup(Game* game) {
-    if (game->data) {
-        free(game->data);
-        game->data = NULL;
+// ============================================
+// ENGINE (Headless game manager)
+// ============================================
+
+static void gm_add(GameManager* gm, Game* g) {
+    if(gm->game_count<5) gm->games[gm->game_count++]=g;
+}
+static void gm_switch(GameManager* gm, int i) {
+    if(i>=0&&i<gm->game_count&&i!=gm->current_game){gm->current_game=i;printf("Switch: %s\n",gm->games[i]->name);}
+}
+static void gm_click(GameManager* gm, int x, int y) {
+    if(x<SIDEBAR_WIDTH){
+        int by=70;
+        for(int i=0;i<gm->game_count;i++){
+            if(y>=by&&y<by+40&&x>=15&&x<SIDEBAR_WIDTH-15){gm_switch(gm,i);return;}
+            by+=55;
+        }
+    } else if(gm->games[gm->current_game]->active)
+        gm->games[gm->current_game]->handle_click(gm->games[gm->current_game],x,y);
+}
+static void gm_render(GameManager* gm) {
+    pthread_mutex_lock(&gm->fb_mutex);
+    Framebuffer* fb=&gm->framebuffer;
+    
+    // Clear
+    fb_fill(fb,0,0,MAIN_WINDOW_WIDTH,MAIN_WINDOW_HEIGHT,0x1A,0x1A,0x1A);
+    
+    // Sidebar
+    fb_fill(fb,0,0,SIDEBAR_WIDTH,MAIN_WINDOW_HEIGHT,0x1A,0x1A,0x1A);
+    fb_text_center(fb,0,25,SIDEBAR_WIDTH,"GAME HUB",0xFF,0xFF,0xFF);
+    fb_fill(fb,10,45,SIDEBAR_WIDTH-20,2,0xCC,0xCC,0xCC);
+    int by=70;
+    for(int i=0;i<gm->game_count;i++){
+        int act=(i==gm->current_game), hov=(i==gm->hover_button);
+        unsigned char r,g,b;
+        if(act){r=0x33;g=0x55;b=0xAA;}else if(hov){r=0xCC;g=0xAA;b=0x33;}else{r=0x33;g=0x33;b=0x33;}
+        fb_fill(fb,15,by,SIDEBAR_WIDTH-30,40,r,g,b);
+        fb_rect(fb,15,by,SIDEBAR_WIDTH-30,40,0xCC,0xCC,0xCC);
+        fb_text_center(fb,15,by+16,SIDEBAR_WIDTH-30,gm->games[i]->name,0xFF,0xFF,0xFF);
+        by+=55;
     }
+    int bot=MAIN_WINDOW_HEIGHT-120;
+    fb_fill(fb,10,bot,SIDEBAR_WIDTH-20,2,0xCC,0xCC,0xCC);
+    char fs[32]; snprintf(fs,sizeof(fs),"FPS: %.1f",gm->fps);
+    fb_text(fb,15,bot+15,fs,0xFF,0xFF,0xFF);
+    fb_text(fb,15,bot+35,"ESC to quit",0xFF,0xFF,0xFF);
+    
+    // Border
+    for(int t=0;t<3;t++)
+        fb_rect(fb,GAME_AREA_X-t-1,GAME_AREA_Y-t-1,GAME_AREA_WIDTH+2*t+2,GAME_AREA_HEIGHT+2*t+2,0xCC,0xCC,0xCC);
+    char lb[64]; snprintf(lb,sizeof(lb),"Current Game: %s",gm->games[gm->current_game]->name);
+    fb_text(fb,GAME_AREA_X,GAME_AREA_Y-15,lb,0xFF,0xFF,0xFF);
+    
+    // Game
+    if(gm->games[gm->current_game]->active)
+        gm->games[gm->current_game]->render(gm->games[gm->current_game],fb);
+    
+    pthread_mutex_unlock(&gm->fb_mutex);
+}
+static void gm_fps(GameManager* gm) {
+    gm->frame_count++; time_t n=time(NULL);
+    if(n-gm->last_fps_update>=1){gm->fps=gm->frame_count/(double)(n-gm->last_fps_update);gm->frame_count=0;gm->last_fps_update=n;}
 }
 
 // ============================================
-// GAME MANAGER FUNCTIONS
+// X11 MIRROR (Just displays the framebuffer)
 // ============================================
 
-static void gm_init_colors(GameManager* gm) {
+static void x11_mirror_frame(GameManager* gm) {
+    if(!gm->display||!gm->ximage) return;
+    pthread_mutex_lock(&gm->fb_mutex);
+    // Convert RGBA framebuffer to X11's BGRX format
+    unsigned char* src = gm->framebuffer.pixels;
+    char* dst = gm->ximage->data;
+    for(int i=0; i<MAIN_WINDOW_WIDTH*MAIN_WINDOW_HEIGHT; i++) {
+        dst[i*4+0] = src[i*4+2]; // B
+        dst[i*4+1] = src[i*4+1]; // G
+        dst[i*4+2] = src[i*4+0]; // R
+        dst[i*4+3] = 0;           // X (unused)
+    }
+    XPutImage(gm->display, gm->window, gm->gc, gm->ximage, 0,0,0,0, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT);
+    XFlush(gm->display);
+    pthread_mutex_unlock(&gm->fb_mutex);
+}
+
+static int x11_init(GameManager* gm) {
+    gm->display = XOpenDisplay(NULL);
+    if(!gm->display) return 0;
+    
     int s = DefaultScreen(gm->display);
-    gm->colors.black = BlackPixel(gm->display, s);
-    gm->colors.white = WhitePixel(gm->display, s);
+    gm->window = XCreateSimpleWindow(gm->display, RootWindow(gm->display,s),
+                                     50,50,MAIN_WINDOW_WIDTH,MAIN_WINDOW_HEIGHT,1,
+                                     BlackPixel(gm->display,s), 0x1A1A1A);
+    XSelectInput(gm->display, gm->window,
+                 ExposureMask|KeyPressMask|KeyReleaseMask|ButtonPressMask|ButtonReleaseMask|PointerMotionMask|StructureNotifyMask);
+    XStoreName(gm->display, gm->window, "Game Hub");
+    XMapWindow(gm->display, gm->window);
+    gm->gc = XCreateGC(gm->display, gm->window, 0, NULL);
     
-    // Create a colormap for custom colors
-    Colormap cmap = DefaultColormap(gm->display, s);
-    XColor color;
+    // Create XImage for mirroring
+    char* imgdata = malloc(MAIN_WINDOW_WIDTH * MAIN_WINDOW_HEIGHT * 4);
+    gm->ximage = XCreateImage(gm->display, DefaultVisual(gm->display,s), 24, ZPixmap, 0,
+                              imgdata, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, 32, 0);
     
-    // Parse and allocate colors
-    XParseColor(gm->display, cmap, "#333333", &color); XAllocColor(gm->display, cmap, &color);
-    gm->colors.gray = color.pixel;
-    
-    XParseColor(gm->display, cmap, "#CCCCCC", &color); XAllocColor(gm->display, cmap, &color);
-    gm->colors.light_gray = color.pixel;
-    
-    XParseColor(gm->display, cmap, "#1A1A1A", &color); XAllocColor(gm->display, cmap, &color);
-    gm->colors.dark_gray = color.pixel;
-    
-    XParseColor(gm->display, cmap, "#3355AA", &color); XAllocColor(gm->display, cmap, &color);
-    gm->colors.blue = color.pixel;
-    
-    XParseColor(gm->display, cmap, "#33AA33", &color); XAllocColor(gm->display, cmap, &color);
-    gm->colors.green = color.pixel;
-    
-    XParseColor(gm->display, cmap, "#CC3333", &color); XAllocColor(gm->display, cmap, &color);
-    gm->colors.red = color.pixel;
-    
-    XParseColor(gm->display, cmap, "#CCAA33", &color); XAllocColor(gm->display, cmap, &color);
-    gm->colors.yellow = color.pixel;
-    
-    XParseColor(gm->display, cmap, "#FF8833", &color); XAllocColor(gm->display, cmap, &color);
-    gm->colors.orange = color.pixel;
-    
-    XParseColor(gm->display, cmap, "#8844AA", &color); XAllocColor(gm->display, cmap, &color);
-    gm->colors.purple = color.pixel;
-}
-
-static void gm_add_game(GameManager* gm, Game* game) {
-    if (gm->game_count < 5) {
-        gm->games[gm->game_count] = game;
-        gm->game_count++;
-    }
-}
-
-static void gm_switch_game(GameManager* gm, int index) {
-    if (index >= 0 && index < gm->game_count && index != gm->current_game) {
-        printf("Switching to game: %s\n", gm->games[index]->name);
-        gm->current_game = index;
-    }
-}
-
-static void gm_draw_button(Display* d, Window w, GC gc, int x, int y, int w_btn, int h_btn, 
-                          const char* text, int is_active, int is_hover, Colors* c) {
-    // Button background
-    if (is_active) {
-        XSetForeground(d, gc, c->blue);
-    } else if (is_hover) {
-        XSetForeground(d, gc, c->yellow);
-    } else {
-        XSetForeground(d, gc, c->gray);
-    }
-    XFillRectangle(d, w, gc, x, y, w_btn, h_btn);
-    
-    // Button border
-    XSetForeground(d, gc, c->light_gray);
-    XDrawRectangle(d, w, gc, x, y, w_btn, h_btn);
-    
-    // Button text
-    XSetForeground(d, gc, c->white);
-    int text_width = XTextWidth(XQueryFont(d, XGContextFromGC(gc)), text, strlen(text));
-    XDrawString(d, w, gc, 
-               x + (w_btn - text_width) / 2, 
-               y + h_btn/2 + 5, 
-               text, strlen(text));
-}
-
-static void gm_draw_sidebar(GameManager* gm) {
-    Display* d = gm->display;
-    Window w = gm->main_window;
-    GC gc = gm->gc;
-    
-    // Sidebar background
-    XSetForeground(d, gc, gm->colors.dark_gray);
-    XFillRectangle(d, w, gc, 0, 0, SIDEBAR_WIDTH, MAIN_WINDOW_HEIGHT);
-    
-    // Title
-    XSetForeground(d, gc, gm->colors.white);
-    char title[] = "GAME HUB";
-    int title_w = XTextWidth(XQueryFont(d, XGContextFromGC(gc)), title, strlen(title));
-    XDrawString(d, w, gc, (SIDEBAR_WIDTH - title_w)/2, 30, title, strlen(title));
-    
-    // Separator
-    XSetForeground(d, gc, gm->colors.light_gray);
-    XDrawLine(d, w, gc, 10, 45, SIDEBAR_WIDTH-10, 45);
-    
-    // Game buttons
-    int btn_y = 70;
-    int btn_height = 40;
-    int btn_spacing = 15;
-    
-    for (int i = 0; i < gm->game_count; i++) {
-        int is_active = (i == gm->current_game);
-        int is_hover = (i == gm->hover_button);
-        
-        gm_draw_button(d, w, gc, 15, btn_y, SIDEBAR_WIDTH-30, btn_height,
-                      gm->games[i]->name, is_active, is_hover, &gm->colors);
-        btn_y += btn_height + btn_spacing;
-    }
-    
-    // Info section at bottom
-    btn_y = MAIN_WINDOW_HEIGHT - 120;
-    XSetForeground(d, gc, gm->colors.light_gray);
-    XDrawLine(d, w, gc, 10, btn_y, SIDEBAR_WIDTH-10, btn_y);
-    
-    btn_y += 15;
-    XSetForeground(d, gc, gm->colors.white);
-    char fps_text[32];
-    snprintf(fps_text, sizeof(fps_text), "FPS: %.1f", gm->fps);
-    XDrawString(d, w, gc, 15, btn_y, fps_text, strlen(fps_text));
-    
-    btn_y += 20;
-    char help[] = "ESC to quit";
-    XDrawString(d, w, gc, 15, btn_y, help, strlen(help));
-}
-
-static void gm_draw_border(GameManager* gm) {
-    Display* d = gm->display;
-    Window w = gm->main_window;
-    GC gc = gm->gc;
-    
-    // Draw border around game area
-    XSetForeground(d, gc, gm->colors.light_gray);
-    for (int i = 0; i < 3; i++) {
-        XDrawRectangle(d, w, gc, 
-                      GAME_AREA_X - i, GAME_AREA_Y - i,
-                      GAME_AREA_WIDTH + 2*i, GAME_AREA_HEIGHT + 2*i);
-    }
-    
-    // Current game label
-    XSetForeground(d, gc, gm->colors.white);
-    char game_label[64];
-    snprintf(game_label, sizeof(game_label), "Current Game: %s", 
-            gm->games[gm->current_game]->name);
-    XDrawString(d, w, gc, GAME_AREA_X, GAME_AREA_Y - 15, game_label, strlen(game_label));
-}
-
-static void gm_handle_sidebar_click(GameManager* gm, int x, int y) {
-    if (x < 0 || x > SIDEBAR_WIDTH) return;
-    
-    int btn_y = 70;
-    int btn_height = 40;
-    int btn_spacing = 15;
-    
-    for (int i = 0; i < gm->game_count; i++) {
-        if (y >= btn_y && y < btn_y + btn_height && x >= 15 && x < SIDEBAR_WIDTH - 15) {
-            gm_switch_game(gm, i);
-            return;
-        }
-        btn_y += btn_height + btn_spacing;
-    }
-}
-
-static void gm_update_fps(GameManager* gm) {
-    gm->frame_count++;
-    time_t now = time(NULL);
-    if (now - gm->last_fps_update >= 1) {
-        gm->fps = gm->frame_count / (double)(now - gm->last_fps_update);
-        gm->frame_count = 0;
-        gm->last_fps_update = now;
-    }
-}
-
-// ============================================
-// MAIN PROGRAM
-// ============================================
-
-int main(void) {
-    GameManager gm;
-    memset(&gm, 0, sizeof(gm));
-    
-    // Initialize display
-    gm.display = XOpenDisplay(NULL);
-    if (!gm.display) {
-        printf("Cannot open display\n");
-        return 1;
-    }
-    
-    gm_init_colors(&gm);
-    
-    int s = DefaultScreen(gm.display);
-    
-    // Create main window
-    gm.main_window = XCreateSimpleWindow(gm.display, 
-                                         RootWindow(gm.display, s),
-                                         50, 50, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, 1,
-                                         BlackPixel(gm.display, s),
-                                         gm.colors.dark_gray);
-    
-    XSelectInput(gm.display, gm.main_window, 
-                ExposureMask | KeyPressMask | KeyReleaseMask | 
-                ButtonPressMask | ButtonReleaseMask | PointerMotionMask |
-                StructureNotifyMask);
-    XStoreName(gm.display, gm.main_window, "Game Hub - Multi-Game Platform");
-    XMapWindow(gm.display, gm.main_window);
-    
-    gm.gc = XCreateGC(gm.display, gm.main_window, 0, NULL);
-    
-    // Initialize games
-    Game rpg_game;
-    memset(&rpg_game, 0, sizeof(Game));
-    strcpy(rpg_game.name, "RPG Adventure");
-    rpg_game.init = rpg_init;
-    rpg_game.handle_event = rpg_handle_event;
-    rpg_game.update = rpg_update;
-    rpg_game.render = rpg_render;
-    rpg_game.cleanup = rpg_cleanup;
-    rpg_game.active = 1;
-    
-    Game snake_game;
-    memset(&snake_game, 0, sizeof(Game));
-    strcpy(snake_game.name, "Snake");
-    snake_game.init = snake_init;
-    snake_game.handle_event = snake_handle_event;
-    snake_game.update = snake_update;
-    snake_game.render = snake_render;
-    snake_game.cleanup = snake_cleanup;
-    snake_game.active = 1;
-    
-    // Add games to manager
-    gm_add_game(&gm, &rpg_game);
-    gm_add_game(&gm, &snake_game);
-    gm.current_game = 0;
-    
-    // Initialize all games
-    for (int i = 0; i < gm.game_count; i++) {
-        gm.games[i]->init(gm.games[i], gm.display, gm.main_window, gm.gc, &gm.colors);
-    }
-    
-    // Seed random for snake game
-    srand(time(NULL));
-    
-    // Wait for window to appear
+    // Wait for window
     XEvent e;
-    do {
-        XNextEvent(gm.display, &e);
-    } while (e.type != MapNotify);
-    
-    printf("Game Hub started! Use buttons to switch games, ESC to quit.\n");
-    
-    int running = 1;
-    gm.last_fps_update = time(NULL);
-    
-    while (running) {
-        // Process all pending events
-        while (XPending(gm.display)) {
-            XNextEvent(gm.display, &e);
-            
-            if (e.type == KeyPress) {
-                KeySym key = XLookupKeysym(&e.xkey, 0);
-                if (key == XK_Escape) {
-                    running = 0;
-                } else if (key == XK_F1) {
-                    gm_switch_game(&gm, 0);  // Switch to RPG
-                } else if (key == XK_F2) {
-                    gm_switch_game(&gm, 1);  // Switch to Snake
-                } else {
-                    // Forward to current game
-                    if (gm.games[gm.current_game]->active) {
-                        gm.games[gm.current_game]->handle_event(
-                            gm.games[gm.current_game], &e);
-                    }
-                }
-            }
-            else if (e.type == KeyRelease) {
-                if (gm.games[gm.current_game]->active) {
-                    gm.games[gm.current_game]->handle_event(
-                        gm.games[gm.current_game], &e);
-                }
-            }
-            else if (e.type == ButtonPress) {
-                int x = e.xbutton.x;
-                int y = e.xbutton.y;
-                
-                if (x < SIDEBAR_WIDTH) {
-                    gm_handle_sidebar_click(&gm, x, y);
-                } else {
-                    if (gm.games[gm.current_game]->active) {
-                        gm.games[gm.current_game]->handle_event(
-                            gm.games[gm.current_game], &e);
-                    }
-                }
-            }
-            else if (e.type == MotionNotify) {
-                gm.hover_button = -1;
-                if (e.xmotion.x < SIDEBAR_WIDTH) {
-                    int btn_y = 70;
-                    int btn_height = 40;
-                    int btn_spacing = 15;
-                    for (int i = 0; i < gm.game_count; i++) {
-                        if (e.xmotion.y >= btn_y && e.xmotion.y < btn_y + btn_height &&
-                            e.xmotion.x >= 15 && e.xmotion.x < SIDEBAR_WIDTH - 15) {
-                            gm.hover_button = i;
-                            break;
-                        }
-                        btn_y += btn_height + btn_spacing;
-                    }
+    do { XNextEvent(gm->display, &e); } while(e.type != MapNotify);
+    printf("X11 mirror ready\n");
+    return 1;
+}
+
+static int x11_to_keycode(KeySym ks) {
+    if(ks==XK_Escape) return 27;
+    if(ks==XK_F1) return 112; if(ks==XK_F2) return 113;
+    if(ks==XK_Up||ks==XK_w||ks==XK_W) return 38;
+    if(ks==XK_Down||ks==XK_s||ks==XK_S) return 40;
+    if(ks==XK_Left||ks==XK_a||ks==XK_A) return 37;
+    if(ks==XK_Right||ks==XK_d||ks==XK_D) return 39;
+    if(ks==XK_r||ks==XK_R) return 82;
+    return 0;
+}
+
+static void x11_process(GameManager* gm, int* running) {
+    while(XPending(gm->display)) {
+        XEvent e; XNextEvent(gm->display, &e);
+        if(e.type == KeyPress) {
+            int k = x11_to_keycode(XLookupKeysym(&e.xkey,0));
+            if(k==27) *running=0;
+            else if(k==112) gm_switch(gm,0);
+            else if(k==113) gm_switch(gm,1);
+            else if(gm->games[gm->current_game]->active)
+                gm->games[gm->current_game]->handle_key(gm->games[gm->current_game],k,1);
+        }
+        else if(e.type == KeyRelease) {
+            int k = x11_to_keycode(XLookupKeysym(&e.xkey,0));
+            if(k&&gm->games[gm->current_game]->active)
+                gm->games[gm->current_game]->handle_key(gm->games[gm->current_game],k,0);
+        }
+        else if(e.type == ButtonPress) gm_click(gm, e.xbutton.x, e.xbutton.y);
+        else if(e.type == MotionNotify) {
+            gm->mouse_x=e.xmotion.x; gm->mouse_y=e.xmotion.y; gm->hover_button=-1;
+            if(e.xmotion.x<SIDEBAR_WIDTH) {
+                int by=70;
+                for(int i=0;i<gm->game_count;i++) {
+                    if(e.xmotion.y>=by&&e.xmotion.y<by+40&&e.xmotion.x>=15&&e.xmotion.x<SIDEBAR_WIDTH-15)
+                        {gm->hover_button=i;break;}
+                    by+=55;
                 }
             }
         }
-        
-        // Update current game
-        if (gm.games[gm.current_game]->active) {
-            gm.games[gm.current_game]->update(gm.games[gm.current_game]);
+    }
+}
+
+static void x11_cleanup(GameManager* gm) {
+    if(gm->ximage) { free(gm->ximage->data); gm->ximage->data=NULL; XDestroyImage(gm->ximage); }
+    if(gm->gc) XFreeGC(gm->display, gm->gc);
+    if(gm->window) XDestroyWindow(gm->display, gm->window);
+    if(gm->display) XCloseDisplay(gm->display);
+}
+
+// ============================================
+// WEB SERVER MIRROR
+// ============================================
+
+typedef struct { int fd; GameManager* gm; pthread_t th; int run; } WS;
+static WS ws;
+
+static const char* html =
+    "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n"
+    "<!DOCTYPE html><html><head><title>Game Hub</title><style>"
+    "body{margin:0;background:#000;display:flex;justify-content:center;align-items:center;height:100vh;overflow:hidden}"
+    "canvas{image-rendering:pixelated;cursor:crosshair}"
+    "#s{position:fixed;top:10px;left:10px;color:#0f0;font-size:14px;background:rgba(0,0,0,.7);padding:8px 12px;border-radius:4px;z-index:10}"
+    "</style></head><body><div id=s>Connecting...</div><canvas id=g></canvas><script>"
+    "const s=document.getElementById('s'),c=document.getElementById('g'),x=c.getContext('2d'),W=1000,H=700;c.width=W;c.height=H;"
+    "let img=x.createImageData(W,H),fc=0,lt=Date.now(),fps=0,con=0;"
+    "function rs(){let sc=Math.min((innerWidth-20)/W,(innerHeight-20)/H,2);c.style.width=Math.floor(W*sc)+'px';c.style.height=Math.floor(H*sc)+'px';}"
+    "addEventListener('resize',rs);rs();"
+    "function ff(){fetch('/f?'+Date.now()).then(r=>r.arrayBuffer()).then(b=>{"
+    "let p=new Uint8Array(b);if(p.length===W*H*4){img.data.set(p);x.putImageData(img,0,0);"
+    "if(!con){con=1}s.textContent='Connected | FPS: '+fps;fc++;let n=Date.now();"
+    "if(n-lt>=1000){fps=fc;fc=0;lt=n;}}setTimeout(ff,16);}).catch(e=>{con=0;s.textContent='Reconnecting...';setTimeout(ff,500);});}"
+    "function si(p){fetch('/i?'+p,{method:'POST',cache:'no-cache'}).catch(()=>{});}"
+    "c.addEventListener('mousemove',e=>{let r=c.getBoundingClientRect();"
+    "si('t=m&x='+Math.round((e.clientX-r.left)*W/r.width)+'&y='+Math.round((e.clientY-r.top)*H/r.height));});"
+    "c.addEventListener('mousedown',e=>{let r=c.getBoundingClientRect();"
+    "si('t=c&x='+Math.round((e.clientX-r.left)*W/r.width)+'&y='+Math.round((e.clientY-r.top)*H/r.height)+'&b='+e.button);e.preventDefault();});"
+    "c.addEventListener('contextmenu',e=>e.preventDefault());"
+    "document.addEventListener('keydown',e=>{si('t=kd&k='+e.keyCode);e.preventDefault();});"
+    "document.addEventListener('keyup',e=>{si('t=ku&k='+e.keyCode);e.preventDefault();});"
+    "ff();</script></body></html>\n";
+
+static void whandle(WS* w, int cf) {
+    char b[16384]; int n=recv(cf,b,sizeof(b)-1,0);
+    if(n<=0) return; b[n]=0;
+    char m[16],p[512]; sscanf(b,"%15s %511s",m,p);
+    
+    if(strcmp(p,"/")==0||strcmp(p,"/index.html")==0) send(cf,html,strlen(html),0);
+    else if(strncmp(p,"/f",2)==0) {
+        pthread_mutex_lock(&w->gm->fb_mutex);
+        int sz=MAIN_WINDOW_WIDTH*MAIN_WINDOW_HEIGHT*4;
+        char h[256]; int hl=snprintf(h,sizeof(h),"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\nCache-Control: no-cache,no-store\r\nConnection: close\r\n\r\n",sz);
+        send(cf,h,hl,0);
+        int sent=0;
+        while(sent<sz){int c=send(cf,w->gm->framebuffer.pixels+sent,sz-sent,0);if(c<=0)break;sent+=c;}
+        pthread_mutex_unlock(&w->gm->fb_mutex);
+    }
+    else if(strncmp(p,"/i?",3)==0) {
+        char*q=strchr(p,'?')+1,t[8]=""; int x=0,y=0,k=0;
+        char*tk=strtok(q,"&");
+        while(tk){
+            if(strncmp(tk,"t=",2)==0)sscanf(tk+2,"%7s",t);
+            else if(strncmp(tk,"x=",2)==0)sscanf(tk+2,"%d",&x);
+            else if(strncmp(tk,"y=",2)==0)sscanf(tk+2,"%d",&y);
+            else if(strncmp(tk,"k=",2)==0)sscanf(tk+2,"%d",&k);
+            tk=strtok(NULL,"&");
         }
-        
-        // Render everything
-        XSetForeground(gm.display, gm.gc, gm.colors.dark_gray);
-        XFillRectangle(gm.display, gm.main_window, gm.gc, 
-                      0, 0, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT);
-        
-        // Draw sidebar
-        gm_draw_sidebar(&gm);
-        
-        // Draw game area border and label
-        gm_draw_border(&gm);
-        
-        // Render current game
-        if (gm.games[gm.current_game]->active) {
-            gm.games[gm.current_game]->render(
-                gm.games[gm.current_game], gm.display, gm.main_window, gm.gc);
+        pthread_mutex_lock(&w->gm->fb_mutex);
+        if(strcmp(t,"m")==0){
+            w->gm->mouse_x=x;w->gm->mouse_y=y;w->gm->hover_button=-1;
+            if(x<SIDEBAR_WIDTH){int by=70;for(int i=0;i<w->gm->game_count;i++){if(y>=by&&y<by+40&&x>=15&&x<SIDEBAR_WIDTH-15){w->gm->hover_button=i;break;}by+=55;}}
         }
+        else if(strcmp(t,"c")==0) gm_click(w->gm,x,y);
+        else if(strcmp(t,"kd")==0||strcmp(t,"ku")==0){
+            int pr=(t[1]=='d');
+            if(k==27)w->run=0;
+            else if(k==112&&pr)gm_switch(w->gm,0);
+            else if(k==113&&pr)gm_switch(w->gm,1);
+            else if(w->gm->games[w->gm->current_game]->active)w->gm->games[w->gm->current_game]->handle_key(w->gm->games[w->gm->current_game],k,pr);
+        }
+        pthread_mutex_unlock(&w->gm->fb_mutex);
+        send(cf,"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK",40,0);
+    } else send(cf,"HTTP/1.1 404\r\nContent-Length: 0\r\n\r\n",38,0);
+}
+
+static void* wthread(void* a) {
+    WS* w=(WS*)a;
+    w->fd=socket(AF_INET,SOCK_STREAM,0);
+    int o=1;setsockopt(w->fd,SOL_SOCKET,SO_REUSEADDR,&o,sizeof(o));
+    struct sockaddr_in ad;memset(&ad,0,sizeof(ad));ad.sin_family=AF_INET;ad.sin_addr.s_addr=INADDR_ANY;ad.sin_port=htons(WEB_PORT);
+    bind(w->fd,(struct sockaddr*)&ad,sizeof(ad));listen(w->fd,10);
+    printf("\n========================================\n  Web: http://localhost:%d\n========================================\n\n",WEB_PORT);
+    w->run=1;
+    while(w->run){
+        fd_set f;FD_ZERO(&f);FD_SET(w->fd,&f);struct timeval tv={0,50000};
+        if(select(w->fd+1,&f,0,0,&tv)>0){
+            struct sockaddr_in ca;socklen_t cl=sizeof(ca);int cf=accept(w->fd,(struct sockaddr*)&ca,&cl);
+            if(cf>=0){struct timeval to={5,0};setsockopt(cf,SOL_SOCKET,SO_RCVTIMEO,&to,sizeof(to));whandle(w,cf);close(cf);}
+        }
+    }
+    close(w->fd);return NULL;
+}
+
+// ============================================
+// MAIN
+// ============================================
+
+int main(int argc, char** argv) {
+    GameManager gm; memset(&gm,0,sizeof(gm));
+    pthread_mutex_init(&gm.fb_mutex,NULL);
+    
+    int web=0;
+    for(int i=1;i<argc;i++) if(strcmp(argv[i],"--web")==0) web=1;
+    
+    // Try X11
+    int has_x11 = x11_init(&gm);
+    if(!has_x11) { printf("No display - web mode\n"); web=1; }
+    if(web && has_x11) { x11_cleanup(&gm); memset(&gm.display,0,sizeof(Display*)+sizeof(Window)+sizeof(GC)+sizeof(XImage*)); has_x11=0; }
+    
+    gm.web_mode = web;
+    
+    // Create games
+    Game r={0},s={0};
+    strcpy(r.name,"RPG Adventure"); r.init=rpg_init;r.handle_key=rpg_key;r.handle_click=rpg_click;r.update=rpg_update;r.render=rpg_render;r.cleanup=rpg_cleanup;r.active=1;
+    strcpy(s.name,"Snake"); s.init=sn_init;s.handle_key=sn_key;s.handle_click=sn_click;s.update=sn_update;s.render=sn_render;s.cleanup=sn_cleanup;s.active=1;
+    gm_add(&gm,&r); gm_add(&gm,&s);
+    
+    for(int i=0;i<gm.game_count;i++) gm.games[i]->init(gm.games[i]);
+    srand(time(NULL)); gm.last_fps_update=time(NULL);
+    
+    // Start web server if needed
+    if(web) { ws.gm=&gm; pthread_create(&ws.th,NULL,wthread,&ws); usleep(500000); }
+    
+    printf("Engine running. %s mode.\n", web?"Web":"X11");
+    
+    int running=1;
+    while(running) {
+        // Process X11 input (if in X11 mode)
+        if(has_x11) x11_process(&gm, &running);
         
-        XFlush(gm.display);
+        // Check web server
+        if(web && !ws.run) running=0;
         
-        gm_update_fps(&gm);
-        usleep(16667);  // ~60 FPS
+        // Update game
+        if(gm.games[gm.current_game]->active) gm.games[gm.current_game]->update(gm.games[gm.current_game]);
+        
+        // Render to framebuffer (headless)
+        gm_render(&gm);
+        
+        // Mirror to X11 (just converts and displays pixels)
+        if(has_x11) x11_mirror_frame(&gm);
+        
+        gm_fps(&gm);
+        usleep(16667);
     }
     
-    // Cleanup
     printf("Shutting down...\n");
-    for (int i = 0; i < gm.game_count; i++) {
-        if (gm.games[i]->active) {
-            gm.games[i]->cleanup(gm.games[i]);
-        }
-    }
-    
-    XFreeGC(gm.display, gm.gc);
-    XDestroyWindow(gm.display, gm.main_window);
-    XCloseDisplay(gm.display);
-    
+    for(int i=0;i<gm.game_count;i++) if(gm.games[i]->active) gm.games[i]->cleanup(gm.games[i]);
+    if(has_x11) x11_cleanup(&gm);
+    if(web) pthread_join(ws.th,NULL);
+    pthread_mutex_destroy(&gm.fb_mutex);
     return 0;
 }
