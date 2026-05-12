@@ -1,17 +1,7 @@
 // =============================================================================
-// GUESSING GAME - SPANE Engine SDK (Final Fixed Version)
+// GUESSING GAME - SPANE Engine SDK (Layout Fixed Version)
 // =============================================================================
-// Compile: gcc -shared -fPIC -O3 -o jogodeadvinhacao.so jogodeadvinhacao.c
-// =============================================================================
-// CONTROLS:
-//   0-9         - Digitar número diretamente (acumula dígitos)
-//   BACKSPACE   - Apagar último dígito
-//   CIMA/BAIXO  - Ajustar palpite (+1/-1)
-//   ENTER/ESPAÇO- Confirmar / Submeter palpite
-//   ESC         - Voltar ao menu
-//   N           - Novo jogo
-//   S           - Estatísticas (funciona em qualquer tela)
-//   R           - Resetar palpite
+// Compile: gcc -shared -fPIC -O3 -o jogodeadivinhacao.so jogodeadivinhacao.c
 // =============================================================================
 
 #include <stdio.h>
@@ -102,9 +92,8 @@ typedef struct {
     int game_over;
     int game_active;
     
-    // Input simples: string de dígitos
-    char guess_str[8];      // String do palpite atual
-    int guess_len;          // Número de dígitos digitados
+    char guess_str[8];
+    int guess_len;
     
     int cursor_visible;
     int frame_count;
@@ -165,42 +154,59 @@ static const unsigned char font_5x7[][5] = {
 };
 
 // =============================================================================
-// Desenho
+// Desenho - relative to game area (0,0 = top-left of GAME_AREA)
 // =============================================================================
-static inline void fb_pixel(Framebuffer* fb, int x, int y, unsigned char r, unsigned char g, unsigned char b) {
-    if (x < 0 || x >= MAIN_WINDOW_WIDTH || y < 0 || y >= MAIN_WINDOW_HEIGHT) return;
-    int i = (y * MAIN_WINDOW_WIDTH + x) * 4;
+static inline void fb_pixel_rel(Framebuffer* fb, int x, int y, unsigned char r, unsigned char g, unsigned char b) {
+    int ax = GAME_AREA_X + x;
+    int ay = GAME_AREA_Y + y;
+    if (ax < GAME_AREA_X || ax >= GAME_AREA_X + GAME_AREA_WIDTH || 
+        ay < GAME_AREA_Y || ay >= GAME_AREA_Y + GAME_AREA_HEIGHT) return;
+    int i = (ay * MAIN_WINDOW_WIDTH + ax) * 4;
     fb->pixels[i] = r; fb->pixels[i+1] = g; fb->pixels[i+2] = b; fb->pixels[i+3] = 255;
 }
 
-static void fb_fill(Framebuffer* fb, int x, int y, int w, int h, unsigned char r, unsigned char g, unsigned char b) {
+static void fb_fill_rel(Framebuffer* fb, int x, int y, int w, int h, unsigned char r, unsigned char g, unsigned char b) {
+    // Clamp to game area
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > GAME_AREA_WIDTH) w = GAME_AREA_WIDTH - x;
+    if (y + h > GAME_AREA_HEIGHT) h = GAME_AREA_HEIGHT - y;
+    if (w <= 0 || h <= 0) return;
+    
     for (int dy = 0; dy < h; dy++)
         for (int dx = 0; dx < w; dx++)
-            fb_pixel(fb, x+dx, y+dy, r, g, b);
+            fb_pixel_rel(fb, x+dx, y+dy, r, g, b);
 }
 
-static void fb_rect(Framebuffer* fb, int x, int y, int w, int h, unsigned char r, unsigned char g, unsigned char b) {
-    for (int dx = 0; dx < w; dx++) { fb_pixel(fb, x+dx, y, r, g, b); fb_pixel(fb, x+dx, y+h-1, r, g, b); }
-    for (int dy = 1; dy < h-1; dy++) { fb_pixel(fb, x, y+dy, r, g, b); fb_pixel(fb, x+w-1, y+dy, r, g, b); }
+static void fb_rect_rel(Framebuffer* fb, int x, int y, int w, int h, unsigned char r, unsigned char g, unsigned char b) {
+    for (int dx = 0; dx < w; dx++) { 
+        fb_pixel_rel(fb, x+dx, y, r, g, b); 
+        fb_pixel_rel(fb, x+dx, y+h-1, r, g, b); 
+    }
+    for (int dy = 1; dy < h-1; dy++) { 
+        fb_pixel_rel(fb, x, y+dy, r, g, b); 
+        fb_pixel_rel(fb, x+w-1, y+dy, r, g, b); 
+    }
 }
 
-static void fb_char(Framebuffer* fb, int x, int y, char c, unsigned char r, unsigned char g, unsigned char b) {
+static void fb_char_rel(Framebuffer* fb, int x, int y, char c, unsigned char r, unsigned char g, unsigned char b) {
     if (c < 32 || c > 126) return;
     const unsigned char* glyph = font_5x7[c-32];
     for (int row = 0; row < 7; row++)
         for (int col = 0; col < 5; col++)
-            if (glyph[col] & (1<<row)) fb_pixel(fb, x+col, y+row, r, g, b);
+            if (glyph[col] & (1<<row)) fb_pixel_rel(fb, x+col, y+row, r, g, b);
 }
 
-static void fb_text(Framebuffer* fb, int x, int y, const char* s, unsigned char r, unsigned char g, unsigned char b) {
+static void fb_text_rel(Framebuffer* fb, int x, int y, const char* s, unsigned char r, unsigned char g, unsigned char b) {
     if (!s) return;
-    for (int i = 0; s[i]; i++) fb_char(fb, x+i*6, y, s[i], r, g, b);
+    for (int i = 0; s[i]; i++) fb_char_rel(fb, x+i*6, y, s[i], r, g, b);
 }
 
-static void fb_text_center(Framebuffer* fb, int x, int y, int w, const char* s, unsigned char r, unsigned char g, unsigned char b) {
+// Helper: center text at given x coordinate (x IS CENTER of text)
+static void fb_text_center_at(Framebuffer* fb, int cx, int y, const char* s, unsigned char r, unsigned char g, unsigned char b) {
     if (!s) return;
     int len = strlen(s);
-    fb_text(fb, x + (w - len*6)/2, y, s, r, g, b);
+    fb_text_rel(fb, cx - (len*6)/2, y, s, r, g, b);
 }
 
 // =============================================================================
@@ -228,7 +234,6 @@ static void save_session(GuessingData* d) {
     for (int i = 0; i < d->num_guesses; i++) fprintf(f, " %d", d->guesses[i]);
     fprintf(f, "\n");
     fclose(f);
-    printf("Saved: target=%d, guesses=%d\n", d->target, d->num_guesses);
 }
 
 static void load_history(GuessingData* d) {
@@ -261,7 +266,6 @@ static void load_history(GuessingData* d) {
     }
     fclose(f);
     if (d) { d->history_scroll = 0; d->total_sessions = num_sessions; }
-    printf("Loaded %d sessions\n", num_sessions);
 }
 
 // =============================================================================
@@ -367,7 +371,6 @@ static void new_game(GuessingData* d) {
     snprintf(d->message, sizeof(d->message), "Nova partida! Adivinhe o numero entre %d e %d", MIN_GUESS, MAX_GUESS);
     snprintf(d->status_message, sizeof(d->status_message), "Digite um numero e pressione ENTER");
     gen_hint(d);
-    printf("New game: target=%d\n", d->target);
 }
 
 static int get_current_guess(GuessingData* d) {
@@ -426,20 +429,14 @@ static void submit_guess(GuessingData* d) {
 }
 
 // =============================================================================
-// Input Handler - CORRIGIDO
+// Input Handler
 // =============================================================================
 static void guessing_handle_key(Game* game, int keycode, int pressed) {
     if (!game || !game->data || !pressed) return;
     GuessingData* d = (GuessingData*)game->data;
     
-    printf("Keycode=%d screen=%d active=%d over=%d guess='%s'\n", 
-           keycode, d->screen, d->game_active, d->game_over, d->guess_str);
-    
     // ===== TECLAS GLOBAIS =====
-    
-    // S - Estatísticas (sempre funciona)
     if (keycode == KEY_S || keycode == 115) {
-        printf(">>> Abrindo estatisticas <<<\n");
         load_history(d);
         calc_stats(d);
         d->screen = SCREEN_STATS;
@@ -447,9 +444,7 @@ static void guessing_handle_key(Game* game, int keycode, int pressed) {
         return;
     }
     
-    // N - Novo jogo (sempre funciona)
     if (keycode == KEY_N || keycode == 110) {
-        printf(">>> Novo jogo <<<\n");
         new_game(d);
         d->screen = SCREEN_GAME;
         return;
@@ -457,12 +452,10 @@ static void guessing_handle_key(Game* game, int keycode, int pressed) {
     
     // ===== ESC =====
     if (keycode == KEY_ESC) {
-        printf(">>> ESC: screen=%d <<<\n", d->screen);
         if (d->screen == SCREEN_GAME) {
-            // Salvar estado e ir para menu
             d->screen = SCREEN_MAIN_MENU;
             if (d->game_active && !d->game_over) {
-                d->game_active = 0; // Pausar jogo
+                d->game_active = 0;
                 snprintf(d->status_message, sizeof(d->status_message), "Jogo pausado. Va em JOGAR para continuar.");
             }
         } else if (d->screen == SCREEN_STATS || d->screen == SCREEN_HISTORY) {
@@ -514,7 +507,6 @@ static void guessing_handle_key(Game* game, int keycode, int pressed) {
     
     // ===== TELA DO JOGO =====
     if (d->screen == SCREEN_GAME) {
-        // Game over
         if (d->game_over) {
             if (keycode == KEY_ENTER || keycode == KEY_SPACE) {
                 new_game(d);
@@ -522,31 +514,24 @@ static void guessing_handle_key(Game* game, int keycode, int pressed) {
             return;
         }
         
-        // Jogo ativo
         if (d->game_active) {
-            // Dígitos 0-9 (keycodes 48-57)
             if (keycode >= 48 && keycode <= 57) {
                 int digit = keycode - 48;
                 if (d->guess_len < 7) {
                     d->guess_str[d->guess_len++] = '0' + digit;
                     d->guess_str[d->guess_len] = 0;
                     
-                    // Limitar a no máximo 2 dígitos (1-100)
                     if (d->guess_len >= 3) {
-                        // Manter só os últimos 2 dígitos
                         d->guess_str[0] = d->guess_str[1];
                         d->guess_str[1] = d->guess_str[2];
                         d->guess_str[2] = 0;
                         d->guess_len = 2;
                     }
                     
-                    // Se o número for > 100, truncar para 2 dígitos
                     if (atoi(d->guess_str) > MAX_GUESS) {
                         d->guess_str[1] = 0;
                         d->guess_len = 1;
                     }
-                    
-                    printf("Digit %d -> guess='%s' (len=%d)\n", digit, d->guess_str, d->guess_len);
                 }
                 return;
             }
@@ -554,45 +539,36 @@ static void guessing_handle_key(Game* game, int keycode, int pressed) {
             switch (keycode) {
                 case KEY_BACK:
                 case KEY_DEL:
-                    // Backspace - apagar último dígito
                     if (d->guess_len > 0) {
                         d->guess_str[--d->guess_len] = 0;
-                        printf("Backspace -> guess='%s'\n", d->guess_str);
                     }
                     break;
                     
                 case KEY_UP:
-                    // Incrementar palpite
                     {
                         int g = get_current_guess(d);
                         g = (g + 1) > MAX_GUESS ? MAX_GUESS : g + 1;
                         snprintf(d->guess_str, sizeof(d->guess_str), "%d", g);
                         d->guess_len = strlen(d->guess_str);
-                        printf("UP -> guess=%d\n", g);
                     }
                     break;
                     
                 case KEY_DOWN:
-                    // Decrementar palpite
                     {
                         int g = get_current_guess(d);
                         g = (g - 1) < MIN_GUESS ? MIN_GUESS : g - 1;
                         snprintf(d->guess_str, sizeof(d->guess_str), "%d", g);
                         d->guess_len = strlen(d->guess_str);
-                        printf("DOWN -> guess=%d\n", g);
                     }
                     break;
                     
                 case KEY_R:
-                    // Reset
                     d->guess_str[0] = 0;
                     d->guess_len = 0;
-                    printf("Reset guess\n");
                     break;
                     
                 case KEY_ENTER:
                 case KEY_SPACE:
-                    printf("Submit: '%s'\n", d->guess_str);
                     submit_guess(d);
                     break;
             }
@@ -601,23 +577,29 @@ static void guessing_handle_key(Game* game, int keycode, int pressed) {
 }
 
 // =============================================================================
-// Click
+// Click - convert window coords to game-relative coords
 // =============================================================================
 static void guessing_handle_click(Game* game, int x, int y) {
     if (!game || !game->data) return;
     GuessingData* d = (GuessingData*)game->data;
     
+    // Convert to game-area-relative coordinates
     int gx = x - GAME_AREA_X;
     int gy = y - GAME_AREA_Y;
     
     if (d->screen == SCREEN_MAIN_MENU) {
-        if (gx >= 80 && gx <= 520) {
-            int item = (gy - 140) / 70;
-            if (item >= 0 && item < MENU_COUNT) {
-                d->menu_selection = item;
-                if (item == MENU_PLAY) { new_game(d); d->screen = SCREEN_GAME; }
-                else if (item == MENU_ANALYZE) { load_history(d); calc_stats(d); d->screen = SCREEN_STATS; }
-                else if (item == MENU_HISTORY) { load_history(d); calc_stats(d); d->screen = SCREEN_HISTORY; }
+        // Menu items are centered horizontally, each 440 wide, 50 tall, spaced 75 apart
+        // Starting Y = 195 (60 margin + 10 title + 45 subtitle + 85 first item)
+        int menu_start_y = 195;
+        for (int i = 0; i < MENU_COUNT; i++) {
+            int my = menu_start_y + i * 75;
+            int mx = (GAME_AREA_WIDTH - 440) / 2; // centered
+            if (gx >= mx && gx <= mx + 440 && gy >= my && gy <= my + 50) {
+                d->menu_selection = i;
+                if (i == MENU_PLAY) { new_game(d); d->screen = SCREEN_GAME; }
+                else if (i == MENU_ANALYZE) { load_history(d); calc_stats(d); d->screen = SCREEN_STATS; }
+                else if (i == MENU_HISTORY) { load_history(d); calc_stats(d); d->screen = SCREEN_HISTORY; }
+                return;
             }
         }
     } else if (d->screen == SCREEN_GAME && d->game_over) {
@@ -638,57 +620,78 @@ static void guessing_update(Game* game) {
 }
 
 // =============================================================================
-// Render - Menu
+// LAYOUT CONSTANTS (relative to 800x600 game area)
+// =============================================================================
+#define MARGIN_X 40
+#define MARGIN_TOP 15
+#define PANEL_SPACING 20
+
+// =============================================================================
+// Render - Menu (CENTERED)
 // =============================================================================
 static void render_menu(Game* game, Framebuffer* fb) {
     GuessingData* d = (GuessingData*)game->data;
-    int cy = GAME_AREA_Y + 60;
+    int cx = GAME_AREA_WIDTH / 2;  // horizontal center
+    int cy = 80;                    // start Y after top margin
     
-    fb_text_center(fb, GAME_AREA_X, cy + 10, GAME_AREA_WIDTH, "JOGO DE ADIVINHACAO", 0xFF, 0xCC, 0x00);
-    fb_text_center(fb, GAME_AREA_X, cy + 45, GAME_AREA_WIDTH, "Use CIMA/BAIXO e ENTER para selecionar", 0x88, 0x88, 0x88);
+    // Title
+    fb_text_center_at(fb, cx, cy, "JOGO DE ADIVINHACAO", 0xFF, 0xCC, 0x00);
+    fb_text_center_at(fb, cx, cy + 35, "Use CIMA/BAIXO e ENTER para selecionar", 0x88, 0x88, 0x88);
     
     const char* items[] = { "[ JOGAR ]", "[ ANALISAR ESTATISTICAS ]", "[ VER HISTORICO ]" };
     const char* descs[] = { "Iniciar nova partida", "Ver estatisticas de desempenho", "Visualizar partidas anteriores" };
     
+    int menu_w = 440;
+    int menu_h = 50;
+    int menu_start_y = cy + 85;
+    int menu_spacing = 75;
+    int menu_x = cx - menu_w / 2;  // centered horizontally
+    
     for (int i = 0; i < MENU_COUNT; i++) {
-        int my = cy + 85 + i * 75;
+        int my = menu_start_y + i * menu_spacing;
         int sel = (i == d->menu_selection);
         
-        fb_fill(fb, GAME_AREA_X + 80, my, 440, 50, sel ? 0x00 : 0x22, sel ? 0x66 : 0x22, sel ? 0xAA : 0x33);
-        if (sel) fb_rect(fb, GAME_AREA_X + 80, my, 440, 50, 0x00, 0xAA, 0xFF);
+        fb_fill_rel(fb, menu_x, my, menu_w, menu_h, sel ? 0x00 : 0x22, sel ? 0x66 : 0x22, sel ? 0xAA : 0x33);
+        if (sel) fb_rect_rel(fb, menu_x, my, menu_w, menu_h, 0x00, 0xAA, 0xFF);
         
-        fb_text_center(fb, GAME_AREA_X + 80, my + 8, 440, items[i], sel ? 0xFF : 0xAA, sel ? 0xFF : 0xAA, sel ? 0x00 : 0xAA);
-        fb_text_center(fb, GAME_AREA_X + 80, my + 28, 440, descs[i], sel ? 0xAA : 0x66, sel ? 0xCC : 0x66, sel ? 0xFF : 0x66);
+        fb_text_center_at(fb, cx, my + 10, items[i], sel ? 0xFF : 0xAA, sel ? 0xFF : 0xAA, sel ? 0x00 : 0xAA);
+        fb_text_center_at(fb, cx, my + 30, descs[i], sel ? 0xAA : 0x66, sel ? 0xCC : 0x66, sel ? 0xFF : 0x66);
         
-        if (sel && d->cursor_visible) fb_text(fb, GAME_AREA_X + 55, my + 15, ">>", 0xFF, 0xFF, 0x00);
+        if (sel && d->cursor_visible) fb_text_rel(fb, menu_x - 30, my + 18, ">>", 0xFF, 0xFF, 0x00);
     }
     
-    fb_text_center(fb, GAME_AREA_X, GAME_AREA_Y + GAME_AREA_HEIGHT - 30, GAME_AREA_WIDTH,
-                   "ESC: Sair  |  S: Estatisticas  |  N: Novo Jogo", 0x66, 0x66, 0x66);
+    // Bottom info
+    fb_text_center_at(fb, cx, GAME_AREA_HEIGHT - 40, "ESC: Sair  |  S: Estatisticas  |  N: Novo Jogo", 0x66, 0x66, 0x66);
     
     if (num_sessions > 0) {
         char info[128];
         snprintf(info, sizeof(info), "%d partidas | Melhor: %d tentativa(s)", num_sessions, d->best_session);
-        fb_text_center(fb, GAME_AREA_X, GAME_AREA_Y + GAME_AREA_HEIGHT - 15, GAME_AREA_WIDTH, info, 0x55, 0x55, 0x55);
+        fb_text_center_at(fb, cx, GAME_AREA_HEIGHT - 20, info, 0x55, 0x55, 0x55);
     }
 }
 
 // =============================================================================
-// Render - Jogo
+// Render - Jogo (TWO-COLUMN LAYOUT)
 // =============================================================================
 static void render_game(Game* game, Framebuffer* fb) {
     GuessingData* d = (GuessingData*)game->data;
-    int bx = GAME_AREA_X + 30, by = GAME_AREA_Y + 15;
     
-    fb_text(fb, bx, by, "JOGO DE ADIVINHACAO", 0xFF, 0xCC, 0x00);
-    fb_text(fb, bx + 350, by, "ESC:Menu  S:Stats  N:Novo", 0x66, 0x66, 0x66);
+    // Header
+    fb_text_rel(fb, MARGIN_X, MARGIN_TOP, "JOGO DE ADIVINHACAO", 0xFF, 0xCC, 0x00);
+    fb_text_rel(fb, GAME_AREA_WIDTH - 250, MARGIN_TOP, "ESC:Menu  S:Stats  N:Novo", 0x66, 0x66, 0x66);
     
-    // Palpite atual
-    int gy = by + 35;
-    fb_text(fb, bx, gy, "SEU PALPITE:", 0xCC, 0xCC, 0xCC);
+    // ---- LEFT COLUMN (x: 40 to 460, width: 420) ----
+    int lx = MARGIN_X;
+    int ly = MARGIN_TOP + 25;
     
-    fb_fill(fb, bx, gy + 20, 220, 50, 0x11, 0x11, 0x22);
-    fb_rect(fb, bx, gy + 20, 220, 50, d->game_over ? 0x44 : 0x00, d->game_over ? 0x44 : 0x88, d->game_over ? 0x44 : 0xFF);
+    // "Seu Palpite" label
+    fb_text_rel(fb, lx, ly, "SEU PALPITE:", 0xCC, 0xCC, 0xCC);
+    
+    // Guess input box
+    int box_w = 240;
+    int box_h = 50;
+    fb_fill_rel(fb, lx, ly + 22, box_w, box_h, 0x11, 0x11, 0x22);
+    fb_rect_rel(fb, lx, ly + 22, box_w, box_h, d->game_over ? 0x44 : 0x00, d->game_over ? 0x44 : 0x88, d->game_over ? 0x44 : 0xFF);
     
     if (d->game_active && !d->game_over) {
         char display[32];
@@ -697,43 +700,48 @@ static void render_game(Game* game, Framebuffer* fb) {
         } else {
             snprintf(display, sizeof(display), "%s", d->guess_str);
         }
-        fb_text(fb, bx + 20, gy + 35, display, 0xFF, 0xFF, 0xFF);
+        fb_text_rel(fb, lx + 20, ly + 38, display, 0xFF, 0xFF, 0xFF);
         
-        // Cursor piscante
         if (d->cursor_visible) {
-            int cx = bx + 20 + (d->guess_len * 6);
-            fb_fill(fb, cx, gy + 42, 6, 2, 0xFF, 0xFF, 0x00);
+            int cxr = lx + 20 + (d->guess_len * 6);
+            fb_fill_rel(fb, cxr, ly + 45, 6, 2, 0xFF, 0xFF, 0x00);
         }
     } else if (d->game_over) {
-        fb_text(fb, bx + 20, gy + 35, "FIM", 0x88, 0x88, 0x88);
+        fb_text_rel(fb, lx + 20, ly + 38, "FIM", 0x88, 0x88, 0x88);
     }
     
-    // Ajuda
-    fb_text(fb, bx + 240, gy + 25, "Digite o numero:", 0x88, 0x88, 0x88);
-    fb_text(fb, bx + 240, gy + 42, "0-9 + ENTER", 0x66, 0x88, 0x66);
-    fb_text(fb, bx + 240, gy + 58, "BACK: Apagar  R: Reset", 0x55, 0x55, 0x66);
+    // Instructions
+    int inst_y = ly + 25;
+    fb_text_rel(fb, lx + box_w + 20, inst_y, "Digite o numero:", 0x88, 0x88, 0x88);
+    fb_text_rel(fb, lx + box_w + 20, inst_y + 18, "0-9 + ENTER", 0x66, 0x88, 0x66);
+    fb_text_rel(fb, lx + box_w + 20, inst_y + 36, "CIMA/BAIXO: +1/-1", 0x55, 0x55, 0x66);
+    fb_text_rel(fb, lx + box_w + 20, inst_y + 54, "BACK: Apagar  R: Reset", 0x55, 0x55, 0x66);
     
-    // Mensagem
-    int my = gy + 90;
+    // Message area
+    int msg_y = ly + 90;
     unsigned char mr = 0xFF, mg = 0xFF, mb = 0xFF;
     if (strstr(d->message, "BAIXO") || strstr(d->message, "baixo")) { mr = 0xFF; mg = 0x66; mb = 0x66; }
     else if (strstr(d->message, "ALTO") || strstr(d->message, "alto")) { mr = 0xFF; mg = 0x66; mb = 0x66; }
     else if (strstr(d->message, "ACERTOU") || strstr(d->message, "PARABENS") || strstr(d->message, "INCRIVEL")) { mr = 0x00; mg = 0xFF; mb = 0x00; }
-    fb_text(fb, bx, my, d->message, mr, mg, mb);
+    fb_text_rel(fb, lx, msg_y, d->message, mr, mg, mb);
     
-    // Dica
+    // Hint
     if (d->game_active && !d->game_over) {
-        fb_text(fb, bx, my + 25, d->hint_message, 0x00, 0xCC, 0xCC);
+        fb_text_rel(fb, lx, msg_y + 25, d->hint_message, 0x00, 0xCC, 0xCC);
     }
     
     // Status
-    fb_text(fb, bx, my + 50, d->status_message, 0x88, 0xAA, 0x88);
+    fb_text_rel(fb, lx, msg_y + 50, d->status_message, 0x88, 0xAA, 0x88);
     
-    // Histórico
-    int hx = bx + 420;
-    fb_fill(fb, hx, by + 30, 220, 380, 0x15, 0x15, 0x20);
-    fb_rect(fb, hx, by + 30, 220, 380, 0x33, 0x33, 0x44);
-    fb_text(fb, hx + 10, by + 40, "HISTORICO:", 0xAA, 0xAA, 0xAA);
+    // ---- RIGHT COLUMN: HISTORY PANEL (x: 490, width: 270) ----
+    int rx = 490;
+    int ry = MARGIN_TOP + 10;
+    int rw = 270;
+    int rh = GAME_AREA_HEIGHT - MARGIN_TOP - 100;
+    
+    fb_fill_rel(fb, rx, ry, rw, rh, 0x15, 0x15, 0x20);
+    fb_rect_rel(fb, rx, ry, rw, rh, 0x33, 0x33, 0x44);
+    fb_text_rel(fb, rx + 10, ry + 10, "HISTORICO:", 0xAA, 0xAA, 0xAA);
     
     for (int i = 0; i < d->num_guesses; i++) {
         char gs[32];
@@ -742,40 +750,47 @@ static void render_game(Game* game, Framebuffer* fb) {
         unsigned char r = d->guesses[i] < d->target ? 0xFF : d->guesses[i] > d->target ? 0xFF : 0x00;
         unsigned char g = d->guesses[i] < d->target ? 0x88 : d->guesses[i] > d->target ? 0x88 : 0xFF;
         unsigned char b = d->guesses[i] < d->target ? 0x88 : d->guesses[i] > d->target ? 0x88 : 0x00;
-        fb_text(fb, hx + 10, by + 65 + i*18, gs, r, g, b);
+        fb_text_rel(fb, rx + 10, ry + 35 + i * 22, gs, r, g, b);
     }
     
-    // Game over
+    // ---- GAME OVER BAR (bottom) ----
     if (d->game_over) {
-        int oy = GAME_AREA_Y + GAME_AREA_HEIGHT - 70;
-        fb_fill(fb, GAME_AREA_X + 10, oy, GAME_AREA_WIDTH - 20, 50, 0x11, 0x33, 0x11);
-        fb_rect(fb, GAME_AREA_X + 10, oy, GAME_AREA_WIDTH - 20, 50, 0x00, 0xFF, 0x00);
-        fb_text_center(fb, GAME_AREA_X + 10, oy + 15, GAME_AREA_WIDTH - 20,
-                       "ENTER: Novo Jogo  |  S: Estatisticas  |  ESC: Menu", 0x00, 0xFF, 0x00);
+        int bar_y = GAME_AREA_HEIGHT - 70;
+        int bar_x = MARGIN_X;
+        int bar_w = GAME_AREA_WIDTH - MARGIN_X * 2;
+        fb_fill_rel(fb, bar_x, bar_y, bar_w, 50, 0x11, 0x33, 0x11);
+        fb_rect_rel(fb, bar_x, bar_y, bar_w, 50, 0x00, 0xFF, 0x00);
+        fb_text_center_at(fb, GAME_AREA_WIDTH / 2, bar_y + 18, "ENTER: Novo Jogo  |  S: Estatisticas  |  ESC: Menu", 0x00, 0xFF, 0x00);
     }
 }
 
 // =============================================================================
-// Render - Estatísticas
+// Render - Estatísticas (CENTERED PANELS)
 // =============================================================================
 static void render_stats(Game* game, Framebuffer* fb) {
     GuessingData* d = (GuessingData*)game->data;
-    int sx = GAME_AREA_X + 30, sy = GAME_AREA_Y + 20;
+    int cx = GAME_AREA_WIDTH / 2;
+    int sy = MARGIN_TOP + 5;
     
-    fb_text(fb, sx, sy, "ESTATISTICAS", 0xFF, 0xCC, 0x00);
-    fb_text(fb, sx + 300, sy, "ESC:Menu  N:Jogar  SETAS:Scroll", 0x66, 0x66, 0x66);
+    fb_text_center_at(fb, cx, sy, "ESTATISTICAS", 0xFF, 0xCC, 0x00);
+    fb_text_rel(fb, GAME_AREA_WIDTH - 300, sy, "ESC:Menu  N:Jogar  SETAS:Scroll", 0x66, 0x66, 0x66);
     
     if (num_sessions == 0) {
-        fb_text_center(fb, GAME_AREA_X, sy + 120, GAME_AREA_WIDTH,
-                       "Nenhuma partida registrada!", 0xFF, 0x88, 0x88);
-        fb_text_center(fb, GAME_AREA_X, sy + 150, GAME_AREA_WIDTH,
-                       "Pressione N para jogar ou ESC para o menu", 0x88, 0x88, 0x88);
+        fb_text_center_at(fb, cx, 200, "Nenhuma partida registrada!", 0xFF, 0x88, 0x88);
+        fb_text_center_at(fb, cx, 230, "Pressione N para jogar ou ESC para o menu", 0x88, 0x88, 0x88);
         return;
     }
     
-    // Box de estatísticas
-    fb_fill(fb, sx, sy + 30, 450, 180, 0x15, 0x15, 0x25);
-    fb_rect(fb, sx, sy + 30, 450, 180, 0x33, 0x55, 0x77);
+    // Two panels side by side
+    int panel_w = 380;
+    int panel_h = 190;
+    int panel_y = sy + 30;
+    int left_x = cx - panel_w - 15;
+    int right_x = cx + 15;
+    
+    // ---- LEFT PANEL: Stats ----
+    fb_fill_rel(fb, left_x, panel_y, panel_w, panel_h, 0x15, 0x15, 0x25);
+    fb_rect_rel(fb, left_x, panel_y, panel_w, panel_h, 0x33, 0x55, 0x77);
     
     char lines[7][128];
     snprintf(lines[0], sizeof(lines[0]), "Total de sessoes:      %d", d->total_sessions);
@@ -789,13 +804,13 @@ static void render_stats(Game* game, Framebuffer* fb) {
     for (int i = 0; i < 7; i++) {
         unsigned char r = 0xFF, g = 0xFF, b = 0xFF;
         if (i == 6) { r = 0x00; g = 0xCC; b = 0xCC; }
-        fb_text(fb, sx + 15, sy + 45 + i*22, lines[i], r, g, b);
+        fb_text_rel(fb, left_x + 20, panel_y + 20 + i * 22, lines[i], r, g, b);
     }
     
-    // Rating
-    fb_fill(fb, sx + 470, sy + 30, 160, 180, 0x15, 0x15, 0x25);
-    fb_rect(fb, sx + 470, sy + 30, 160, 180, 0x33, 0x55, 0x77);
-    fb_text(fb, sx + 480, sy + 40, "AVALIACAO:", 0xFF, 0xCC, 0x00);
+    // ---- RIGHT PANEL: Rating ----
+    fb_fill_rel(fb, right_x, panel_y, panel_w, panel_h, 0x15, 0x15, 0x25);
+    fb_rect_rel(fb, right_x, panel_y, panel_w, panel_h, 0x33, 0x55, 0x77);
+    fb_text_center_at(fb, right_x + panel_w/2, panel_y + 20, "AVALIACAO", 0xFF, 0xCC, 0x00);
     
     const char* stars;
     if (d->avg_guesses < 6) stars = "***** EXPERT";
@@ -803,70 +818,78 @@ static void render_stats(Game* game, Framebuffer* fb) {
     else if (d->avg_guesses < 10) stars = "*** MEDIO";
     else if (d->avg_guesses < 15) stars = "** BASICO";
     else stars = "* INICIANTE";
-    fb_text(fb, sx + 480, sy + 70, stars, 0xFF, 0xFF, 0x00);
+    fb_text_center_at(fb, right_x + panel_w/2, panel_y + 60, stars, 0xFF, 0xFF, 0x00);
     
-    // Histórico compacto
-    fb_text(fb, sx, sy + 220, "ULTIMAS PARTIDAS:", 0xAA, 0xAA, 0xAA);
+    fb_text_center_at(fb, right_x + panel_w/2, panel_y + 100, get_strategy(d), 0xAA, 0xCC, 0xAA);
+    
+    // ---- BOTTOM: Recent sessions ----
+    int hist_y = panel_y + panel_h + 20;
+    fb_text_rel(fb, MARGIN_X, hist_y, "ULTIMAS PARTIDAS:", 0xAA, 0xAA, 0xAA);
+    
     int start = d->history_scroll;
-    if (start > num_sessions - 8) start = num_sessions - 8;
+    if (start > num_sessions - 10) start = num_sessions - 10;
     if (start < 0) start = 0;
     
-    for (int i = 0; i < 8 && (start+i) < num_sessions; i++) {
+    for (int i = 0; i < 10 && (start+i) < num_sessions; i++) {
         Session* s = &sessions[start+i];
         char line[128];
         char ts[20];
-        struct tm* tm = localtime(&s->timestamp);
-        strftime(ts, sizeof(ts), "%d/%m %H:%M", tm);
+        struct tm* tm_info = localtime(&s->timestamp);
+        strftime(ts, sizeof(ts), "%d/%m %H:%M", tm_info);
         snprintf(line, sizeof(line), "%s  Alvo:%d  Tentativas:%d", ts, s->target, s->num_guesses);
         
         unsigned char r = s->num_guesses == d->best_session ? 0x00 : 0xAA;
         unsigned char g = s->num_guesses == d->best_session ? 0xFF : 0xAA;
         unsigned char b = s->num_guesses == d->worst_session ? 0x66 : 0xAA;
-        fb_text(fb, sx + 10, sy + 245 + i*18, line, r, g, b);
+        fb_text_rel(fb, MARGIN_X + 10, hist_y + 25 + i * 22, line, r, g, b);
     }
 }
 
 // =============================================================================
-// Render - Histórico
+// Render - Histórico (FULL WIDTH TABLE)
 // =============================================================================
 static void render_history(Game* game, Framebuffer* fb) {
     GuessingData* d = (GuessingData*)game->data;
-    int sx = GAME_AREA_X + 20, sy = GAME_AREA_Y + 20;
+    int cx = GAME_AREA_WIDTH / 2;
+    int sy = MARGIN_TOP + 5;
     
-    fb_text(fb, sx + 10, sy, "HISTORICO COMPLETO", 0xFF, 0xCC, 0x00);
-    fb_text(fb, sx + 300, sy, "ESC:Menu  SETAS:Scroll", 0x66, 0x66, 0x66);
+    fb_text_center_at(fb, cx, sy, "HISTORICO COMPLETO", 0xFF, 0xCC, 0x00);
+    fb_text_rel(fb, GAME_AREA_WIDTH - 250, sy, "ESC:Menu  SETAS:Scroll", 0x66, 0x66, 0x66);
     
     if (num_sessions == 0) {
-        fb_text_center(fb, GAME_AREA_X, sy + 100, GAME_AREA_WIDTH,
-                       "Nenhum historico disponivel", 0xFF, 0x88, 0x88);
+        fb_text_center_at(fb, cx, 250, "Nenhum historico disponivel", 0xFF, 0x88, 0x88);
         return;
     }
     
-    // Cabeçalho
+    // Table header
+    int table_x = MARGIN_X + 10;
+    int table_y = sy + 35;
+    int table_w = GAME_AREA_WIDTH - MARGIN_X * 2 - 20;
+    
+    fb_fill_rel(fb, table_x, table_y - 5, table_w, 25, 0x20, 0x20, 0x30);
     char hdr[128];
     snprintf(hdr, sizeof(hdr), "%-18s %-6s %-10s %s", "DATA/HORA", "ALVO", "TENTATIVAS", "PALPITES");
-    fb_text(fb, sx + 5, sy + 35, hdr, 0xCC, 0xCC, 0xCC);
-    for (int i = 0; i < 72; i++) fb_char(fb, sx+5+i*6, sy+43, '-', 0x44,0x44,0x44);
+    fb_text_rel(fb, table_x + 5, table_y, hdr, 0xCC, 0xCC, 0xCC);
     
     int start = d->history_scroll;
-    int maxd = 14;
+    int maxd = 16;
     if (start > num_sessions - maxd) start = num_sessions - maxd;
     if (start < 0) start = 0;
     
     for (int i = 0; i < maxd && (start+i) < num_sessions; i++) {
         Session* s = &sessions[start+i];
         char line[512], ts[20];
-        struct tm* tm = localtime(&s->timestamp);
-        strftime(ts, sizeof(ts), "%d/%m/%Y %H:%M", tm);
+        struct tm* tm_info = localtime(&s->timestamp);
+        strftime(ts, sizeof(ts), "%d/%m/%Y %H:%M", tm_info);
         
         char gs[128] = "";
-        int ms = s->num_guesses < 5 ? s->num_guesses : 5;
+        int ms = s->num_guesses < 6 ? s->num_guesses : 6;
         for (int j = 0; j < ms; j++) {
             char num[8];
             snprintf(num, sizeof(num), "%d%s", s->guesses[j], j < ms-1 ? "," : "");
             strcat(gs, num);
         }
-        if (s->num_guesses > 5) strcat(gs, "...");
+        if (s->num_guesses > 6) strcat(gs, "...");
         
         snprintf(line, sizeof(line), "%-18s %-6d %-10d %s", ts, s->target, s->num_guesses, gs);
         
@@ -875,13 +898,18 @@ static void render_history(Game* game, Framebuffer* fb) {
             if (s->num_guesses == d->best_session) { r = 0x00; g = 0xFF; b = 0x00; }
             else if (s->num_guesses == d->worst_session) { r = 0xFF; g = 0x66; b = 0x66; }
         }
-        fb_text(fb, sx + 5, sy + 50 + i*18, line, r, g, b);
+        
+        // Alternating row colors
+        if (i % 2 == 0) fb_fill_rel(fb, table_x, table_y + 25 + i * 22, table_w, 22, 0x12, 0x12, 0x18);
+        fb_text_rel(fb, table_x + 5, table_y + 28 + i * 22, line, r, g, b);
     }
     
-    if (start > 0) fb_text(fb, sx + 350, sy + 35, "^ MAIS ^", 0xFF, 0xCC, 0x00);
-    if (start + maxd < num_sessions) fb_text(fb, sx + 350, sy + 50 + maxd*18, "v MAIS v", 0xFF, 0xCC, 0x00);
+    // Scroll indicators
+    if (start > 0) fb_text_center_at(fb, cx, table_y - 15, "[ Mais acima ]", 0xFF, 0xCC, 0x00);
+    if (start + maxd < num_sessions) fb_text_center_at(fb, cx, table_y + 28 + maxd * 22, "[ Mais abaixo ]", 0xFF, 0xCC, 0x00);
     
-    fb_text(fb, sx + 5, sy + 320, "Verde=Melhor  Vermelho=Pior", 0x88, 0x88, 0x88);
+    // Legend
+    fb_text_center_at(fb, cx, GAME_AREA_HEIGHT - 30, "Verde = Melhor  |  Vermelho = Pior", 0x88, 0x88, 0x88);
 }
 
 // =============================================================================
@@ -891,8 +919,8 @@ static void guessing_render(Game* game, Framebuffer* fb) {
     if (!game || !game->data || !fb) return;
     GuessingData* d = (GuessingData*)game->data;
     
-    fb_fill(fb, GAME_AREA_X, GAME_AREA_Y, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x11, 0x11, 0x1A);
-    fb_rect(fb, GAME_AREA_X, GAME_AREA_Y, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x33, 0x55, 0x77);
+    // Fill entire game area with background
+    fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x11, 0x11, 0x1A);
     
     switch (d->screen) {
         case SCREEN_MAIN_MENU: render_menu(game, fb); break;
@@ -925,7 +953,6 @@ static void guessing_init(Game* game) {
     
     game->data = d;
     game->active = 1;
-    printf("Jogo inicializado com sucesso!\n");
 }
 
 static void guessing_cleanup(Game* game) {
@@ -936,7 +963,6 @@ static void guessing_cleanup(Game* game) {
 // ENTRY POINT
 // =============================================================================
 __attribute__((visibility("default"))) Game* create_game() {
-    printf("Criando Jogo de Adivinhacao\n");
     Game* game = (Game*)calloc(1, sizeof(Game));
     if (!game) return NULL;
     
