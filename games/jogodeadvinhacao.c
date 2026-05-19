@@ -25,7 +25,6 @@
 #define MIN_GUESS 1
 #define MAX_GUESS 100
 #define MAX_GUESSES 20
-#define MAX_SCORES 100
 #define HISTORY_FILE "guessing_history.txt"
 
 // Keycodes do SPANE
@@ -119,7 +118,8 @@ typedef struct {
     int hint_level;
 } GuessingData;
 
-static Session sessions[MAX_SCORES];
+static Session* sessions = NULL;
+static int sessions_capacity = 0;
 static int num_sessions = 0;
 
 // =============================================================================
@@ -278,20 +278,41 @@ static void save_session(GuessingData* d) {
 }
 
 static void load_history(GuessingData* d) {
+    // Free previous sessions if any
+    if (sessions) {
+        free(sessions);
+        sessions = NULL;
+    }
+    sessions_capacity = 0;
     num_sessions = 0;
+    
     if (d) { 
         d->history_scroll = 0; 
         d->total_sessions = 0; 
     }
     
+    // First pass: count sessions
     FILE* f = fopen(HISTORY_FILE, "r");
     if (!f) return;
     
-    char line[2048];  // Larger buffer for safety
+    char line[2048];
+    int count = 0;
+    while (fgets(line, sizeof(line), f)) {
+        count++;
+    }
+    rewind(f);
     
-    while (fgets(line, sizeof(line), f) && num_sessions < MAX_SCORES) {
+    // Allocate exactly what we need
+    sessions = (Session*)calloc(count, sizeof(Session));
+    if (!sessions) {
+        fclose(f);
+        return;
+    }
+    sessions_capacity = count;
+    
+    while (fgets(line, sizeof(line), f) && num_sessions < count) {
         Session* s = &sessions[num_sessions];
-        memset(s, 0, sizeof(Session));  // Zero initialize
+        memset(s, 0, sizeof(Session));
         
         char* token = strtok(line, " \n");
         if (!token) continue;
@@ -367,24 +388,27 @@ static void calc_stats(GuessingData* d) {
         return;
     }
     
-    int gc[MAX_SCORES];
-    int count = (num_sessions > MAX_SCORES) ? MAX_SCORES : num_sessions;
+    // Use all sessions
+    int* gc = (int*)malloc(num_sessions * sizeof(int));
+    if (!gc) return;
     
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < num_sessions; i++) {
         gc[i] = sessions[i].num_guesses;
     }
     
-    d->total_sessions = count;
-    int sum = rec_sum(gc, count);
-    d->avg_guesses = (double)sum / count;
-    d->best_session = rec_min(gc, count);
-    d->worst_session = rec_max(gc, count);
-    double var = rec_sum_sq(gc, count, d->avg_guesses) / count;
+    d->total_sessions = num_sessions;
+    int sum = rec_sum(gc, num_sessions);
+    d->avg_guesses = (double)sum / num_sessions;
+    d->best_session = rec_min(gc, num_sessions);
+    d->worst_session = rec_max(gc, num_sessions);
+    double var = rec_sum_sq(gc, num_sessions, d->avg_guesses) / num_sessions;
     d->std_dev = my_sqrt(var);
     
     snprintf(d->status_message, sizeof(d->status_message), 
              "%d sessoes | Media: %.1f | Melhor: %d | Pior: %d", 
-             count, d->avg_guesses, d->best_session, d->worst_session);
+             num_sessions, d->avg_guesses, d->best_session, d->worst_session);
+    
+    free(gc);
 }
 
 static const char* get_strategy(GuessingData* d) {
@@ -1171,6 +1195,12 @@ static void guessing_cleanup(Game* game) {
         free(game->data); 
         game->data = NULL; 
     }
+    if (sessions) {
+        free(sessions);
+        sessions = NULL;
+    }
+    sessions_capacity = 0;
+    num_sessions = 0;
 }
 
 // =============================================================================
