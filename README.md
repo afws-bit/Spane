@@ -1,5 +1,8 @@
 
 
+Principais Ferramentas:
+draw.io: utilizado para o diagrama.
+Notion: ferramenta utilizada para o backlog e controle de tarefas.
 
 
 
