@@ -23,6 +23,15 @@ O **Spane Engine** é um ecossistema completo para o desenvolvimento de jogos no
 
 🌎 ```spane```
 
+
+## Tela do quadro Kanban
+ㅤ<img width="1076" height="476" alt="Captura de tela 2026-06-03 170059" src="https://github.com/user-attachments/assets/3a8cbe50-fb83-4c8f-95df-4ed6d3872dd6" />
+
+
+
+
+
+
 ## Equipe 👥:
 - João Lucas Mendes Dos Santos: testes gerais, linear, back log
 - Augusto Freitas: figma, back end, linear
