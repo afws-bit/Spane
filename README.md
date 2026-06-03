@@ -40,6 +40,6 @@ O **Spane Engine** é um ecossistema completo para o desenvolvimento de jogos no
 - Daniel Luiz Massud: back end, front end, testes gerais, arquitetura
 - Fernando Antônio: parte criativa, suporte geral
 - Gustavo Cassemiro: back log, arquitetura
-- Glauberson: 
+- Glauberson: suporte geral, comunicação
 - Caio Catão: linear, figma, front end, back end
 
