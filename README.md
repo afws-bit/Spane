@@ -30,7 +30,7 @@ O **Spane Engine** é um ecossistema completo para o desenvolvimento de jogos no
 
 
 ## 🤝 Relato de experiência em programação em pares
-Durante o desenvolvimento do projeto, utilizamos a programação em pares para implementar funcionalidades e corrigir problemas. Enquanto um integrante escrevia o código, o outro acompanhava, revisava e sugeria melhorias em tempo real. Essa prática contribuiu para reduzir erros, aumentar a qualidade do código e promover a troca de conhecimentos entre a equipe. Além disso, a colaboração constante facilitou a tomada de decisões e tornou o processo de desenvolvimento mais eficiente.
+"Durante o desenvolvimento do projeto, utilizamos a programação em pares para implementar funcionalidades e corrigir problemas. Enquanto um integrante escrevia o código, o outro acompanhava, revisava e sugeria melhorias em tempo real. Essa prática contribuiu para reduzir erros, aumentar a qualidade do código e promover a troca de conhecimentos entre a equipe. Além disso, a colaboração constante facilitou a tomada de decisões e tornou o processo de desenvolvimento mais eficiente."
 
 
 
