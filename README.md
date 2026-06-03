@@ -13,8 +13,8 @@ O **Spane Engine** é um ecossistema completo para o desenvolvimento de jogos no
 ## Principais Ferramentas ⚙️:
 
 - **draw.io**: utilizado para o diagrama.
-- [**Notion**:] (https://app.notion.com/p/373c226bd9dc80b5bf2cd36dda22cdff?v=373c226bd9dc8099821d000cc6935f3c&source=copy_link) ferramenta utilizada para o backlog e controle de tarefas.
-- **Figma**: usado no para simular o prototipo e a inetrface do programa
+- [Notion] (https://app.notion.com/p/373c226bd9dc80b5bf2cd36dda22cdff?v=373c226bd9dc8099821d000cc6935f3c&source=copy_link) ferramenta utilizada para o backlog e controle de tarefas.
+- **Figma**: usado para simular o prototipo e a interface do programa
 - **Discord**: usado para reuniões e encontros 
 
 
