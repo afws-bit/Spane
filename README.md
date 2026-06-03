@@ -27,6 +27,7 @@ O **Spane Engine** é um ecossistema completo para o desenvolvimento de jogos no
 ## Tela do quadro Kanban
 ㅤ<img width="1076" height="476" alt="Captura de tela 2026-06-03 170059" src="https://github.com/user-attachments/assets/3a8cbe50-fb83-4c8f-95df-4ed6d3872dd6" />
 
+<img width="1355" height="524" alt="image" src="https://github.com/user-attachments/assets/132e72b2-c945-4bb4-a032-22ca2158ba46" />
 
 
 ## 🤝 Relato de experiência em programação em pares
