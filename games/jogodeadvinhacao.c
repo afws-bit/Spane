@@ -1,5 +1,5 @@
 // =============================================================================
-// GUESSING GAME - SPANE Engine SDK (VERSÃO FINAL CORRIGIDA)
+// GUESSING GAME - SPANE Engine SDK (VERSÃO FINAL CORRIGIDA - 10000 SESSÕES)
 // =============================================================================
 // Compile: gcc -shared -fPIC -O3 -o jogodeadivinhacao.so jogodeadivinhacao.c
 // =============================================================================
@@ -25,7 +25,7 @@
 #define MIN_GUESS 1
 #define MAX_GUESS 100
 #define MAX_GUESSES 20
-#define MAX_SCORES 100
+#define MAX_SCORES 10000  // ALTERAÇÃO 1: era 100, agora 10000
 #define HISTORY_FILE "gamedata/guessing_history.txt"
 
 // Keycodes do SPANE
@@ -127,7 +127,7 @@ typedef struct {
     int report_scroll;
 } GuessingData;
 
-static Session sessions[MAX_SCORES];
+static Session sessions[10000];  // ALTERAÇÃO 2: era [MAX_SCORES], agora [10000] diretamente
 static int num_sessions = 0;
 
 // =============================================================================
@@ -267,13 +267,9 @@ static double rec_sum_sq(int* arr, int n, double mean) {
 // =============================================================================
 // Histórico e Arquivo
 // =============================================================================
-// =============================================================================
-// Histórico e Arquivo
-// =============================================================================
 static void save_session(GuessingData* d) {
     if (!d) return;
     
-    // Criar diretório gamedata/ se não existir
     #ifdef _WIN32
         system("if not exist gamedata mkdir gamedata");
     #else
@@ -298,7 +294,7 @@ static void load_history(GuessingData* d) {
     if (!f) return;
     
     char line[2048];
-    while (fgets(line, sizeof(line), f) && num_sessions < MAX_SCORES) {
+    while (fgets(line, sizeof(line), f) && num_sessions < 10000) {  // ALTERAÇÃO 3: era MAX_SCORES, agora 10000
         Session* s = &sessions[num_sessions];
         memset(s, 0, sizeof(Session));
         
@@ -344,7 +340,7 @@ static void generate_report(GuessingData* d) {
         return;
     }
     
-    int gc[MAX_SCORES];
+    int gc[10000];  // ALTERAÇÃO 4: era [MAX_SCORES], agora [10000]
     int count = num_sessions;
     
     for (int i = 0; i < count; i++)
