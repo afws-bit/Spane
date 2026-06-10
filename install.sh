@@ -1,7 +1,7 @@
 #!/bin/sh
 
 # =============================================================================
-# SPANE GAME ENGINE - INSTALLATION SCRIPT
+# SPANE GAME ENGINE - INSTALLATION SCRIPT (WITH GAMEDATA PRESERVATION)
 # =============================================================================
 
 # PROJECT BASIC INFO
@@ -217,7 +217,7 @@ has_x11() {
 # GAMEDATA PRESERVATION FUNCTIONS
 # =============================================================================
 
-# Find and backup all gamedata directories recursively
+# Find and backup all gamedata directories recursively from INSTALL_DIR
 backup_gamedata_dirs() {
     local search_dir="$1"
     local backup_root="$2"
@@ -226,41 +226,40 @@ backup_gamedata_dirs() {
     
     if [ ! -d "$search_dir" ]; then
         log_message "No existing installation found at $search_dir"
-        return 0
+        return 1
     fi
     
     # Create backup directory structure
     mkdir -p "$backup_root"
     
     # Find all directories named "gamedata" recursively
-    local count=0
-    find "$search_dir" -type d -name "gamedata" | while read -r gamedata_path; do
-        # Calculate relative path from INSTALL_DIR
+    local found=0
+    find "$search_dir" -type d -name "gamedata" 2>/dev/null | while read -r gamedata_path; do
+        # Calculate relative path from search_dir
         local rel_path="${gamedata_path#$search_dir/}"
         local backup_path="$backup_root/$rel_path"
         
         log_message "  Found: $rel_path"
         
-        # Create parent directory structure
+        # Create parent directory structure in backup
         mkdir -p "$(dirname "$backup_path")"
         
-        # Copy the entire gamedata directory
+        # Copy the entire gamedata directory preserving all attributes
         if cp -a "$gamedata_path" "$backup_path" 2>/dev/null; then
-            count=$((count + 1))
             log_message "  ✓ Backed up to: $backup_path"
         else
             log_message "  ⚠ Failed to backup: $rel_path"
         fi
     done
     
-    # Check if any gamedata dirs were found
-    if [ -z "$(ls -A "$backup_root" 2>/dev/null)" ]; then
-        log_message "No gamedata directories found"
+    # Check if any gamedata dirs were found and backed up
+    if [ -n "$(find "$backup_root" -type d -name "gamedata" 2>/dev/null)" ]; then
+        log_message "✓ Gamedata backup complete"
+        return 0
+    else
+        log_message "No gamedata directories found - nothing to backup"
         return 1
     fi
-    
-    log_message "✓ Gamedata backup complete"
-    return 0
 }
 
 # Restore gamedata directories after installation
@@ -268,25 +267,31 @@ restore_gamedata_dirs() {
     local backup_root="$1"
     local target_dir="$2"
     
-    if [ ! -d "$backup_root" ] || [ -z "$(ls -A "$backup_root" 2>/dev/null)" ]; then
+    if [ ! -d "$backup_root" ]; then
+        return 1
+    fi
+    
+    if [ -z "$(find "$backup_root" -type d -name "gamedata" 2>/dev/null)" ]; then
+        log_message "No gamedata backups to restore"
         return 1
     fi
     
     log_message "Restoring gamedata directories..."
     
-    find "$backup_root" -type d -name "gamedata" | while read -r backup_gamedata; do
+    find "$backup_root" -type d -name "gamedata" 2>/dev/null | while read -r backup_gamedata; do
         # Calculate relative path from backup root
         local rel_path="${backup_gamedata#$backup_root/}"
         local target_path="$target_dir/$rel_path"
         
-        log_message "  Restoring: $rel_path"
+        log_message "  Restoring: $rel_path -> $target_path"
         
         # Create parent directories if needed
-        mkdir -p "$(dirname "$target_path")"
+        $SUDO mkdir -p "$(dirname "$target_path")"
         
-        # Copy back the gamedata
-        if cp -a "$backup_gamedata" "$target_path" 2>/dev/null; then
-            log_message "  ✓ Restored to: $target_path"
+        # Copy back the gamedata with proper permissions
+        if $SUDO cp -a "$backup_gamedata" "$target_path" 2>/dev/null; then
+            $SUDO chmod -R 755 "$target_path" 2>/dev/null
+            log_message "  ✓ Restored"
         else
             log_message "  ⚠ Failed to restore: $rel_path"
         fi
@@ -297,23 +302,25 @@ restore_gamedata_dirs() {
 
 # Main update function that preserves gamedata
 perform_update() {
-    log_message "Starting update process..."
+    log_message "Starting update process with gamedata preservation..."
     
     # Create temporary directory for gamedata backup
     local gamedata_backup="/tmp/spane_gamedata_backup_$$"
+    rm -rf "$gamedata_backup"
     mkdir -p "$gamedata_backup"
     
-    # Step 1: Backup all gamedata directories
-    log_message "Backing up gamedata directories..."
+    # Step 1: Backup all gamedata directories from installed location
+    log_message "Step 1/4: Backing up gamedata directories..."
     backup_gamedata_dirs "$INSTALL_DIR" "$gamedata_backup"
+    local had_backup=$?
     
-    # Step 2: Remove old installation but keep a copy of gamedata backup
-    log_message "Removing old installation..."
+    # Step 2: Remove old installation
+    log_message "Step 2/4: Removing old installation..."
     $SUDO rm -rf "$INSTALL_DIR"
     [ -L "$BIN_DIR/$BINARY_NAME" ] && $SUDO rm -f "$BIN_DIR/$BINARY_NAME"
     
     # Step 3: Perform new installation
-    log_message "Installing new version..."
+    log_message "Step 3/4: Installing new version..."
     
     rm -rf "$BUILD_DIR"
     mkdir -p "$BUILD_DIR"
@@ -325,6 +332,10 @@ perform_update() {
     
     if [ ! -f "$src" ]; then
         log_message "Error: No Spane.c found"
+        if [ "$had_backup" = "0" ]; then
+            log_message "⚠ Gamedata backup exists at: $gamedata_backup"
+            log_message "  Save it manually before it's cleaned up"
+        fi
         rm -rf "$gamedata_backup"
         exit 1
     fi
@@ -335,8 +346,13 @@ perform_update() {
         compile_games
         install_spane
         
-        # Step 4: Restore all gamedata directories
-        restore_gamedata_dirs "$gamedata_backup" "$INSTALL_DIR"
+        # Step 4: Restore all gamedata directories if backup exists
+        if [ "$had_backup" = "0" ]; then
+            log_message "Step 4/4: Restoring gamedata directories..."
+            restore_gamedata_dirs "$gamedata_backup" "$INSTALL_DIR"
+        else
+            log_message "Step 4/4: No gamedata to restore"
+        fi
         
         # Clean up backup
         rm -rf "$gamedata_backup"
@@ -345,8 +361,11 @@ perform_update() {
         log_message "✓ Update complete - gamedata preserved"
         return 0
     else
-        log_message "✗ Compilation failed - gamedata backup preserved at: $gamedata_backup"
-        log_message "  Manual restore: cp -a $gamedata_backup/* $INSTALL_DIR/"
+        log_message "✗ Compilation failed!"
+        if [ "$had_backup" = "0" ]; then
+            log_message "⚠ Gamedata backup preserved at: $gamedata_backup"
+            log_message "  Manual restore: sudo cp -a $gamedata_backup/* $INSTALL_DIR/"
+        fi
         return 1
     fi
 }
@@ -455,7 +474,6 @@ static void x11_cleanup(void* gm) {}
 HEADER
 
     # Now copy the original file, skipping X11 includes and X11 function bodies
-    # Use sed to delete lines between markers
     sed \
         -e '/#include <X11\//d' \
         -e '/^\/\/ Compile:.*-lX11/d' \
@@ -532,13 +550,24 @@ compile_games() {
     log_message "Compiling games..."
     
     local dir="$MAIN_SOURCE_DIR/games"
-    mkdir -p "$BUILD_DIR/games" "$dir"
+    
+    # Create games directory in source if it doesn't exist
+    if [ ! -d "$dir" ]; then
+        log_message "No games directory found, creating..."
+        mkdir -p "$dir"
+    fi
+    
+    mkdir -p "$BUILD_DIR/games"
     
     local count=0
     for f in "$dir"/*.c; do
         [ ! -f "$f" ] && continue
         local name=$(basename "$f" .c)
-        if gcc -shared -fPIC -O3 -march=native -o "$BUILD_DIR/games/${name}.so" "$f" 2>&1; then
+        
+        # Compile with SPANE_GAMES_DIR defined for proper gamedata paths
+        if gcc -shared -fPIC -O3 -march=native \
+            -DSPANE_GAMES_DIR="\"$GAMES_DIR\"" \
+            -o "$BUILD_DIR/games/${name}.so" "$f" 2>&1; then
             log_message "  ✓ $name.so"
             count=$((count + 1))
         else
@@ -546,7 +575,7 @@ compile_games() {
         fi
     done
     
-    log_message "Games: $count"
+    log_message "Games compiled: $count"
     return 0
 }
 
@@ -562,15 +591,28 @@ install_spane() {
         $SUDO chmod 644 "$GAMES_DIR/"*.so 2>/dev/null
     fi
     
+    # Create run script that sets environment variables for gamedata persistence
     $SUDO tee "$INSTALL_DIR/run_spane.sh" > /dev/null << 'EOF'
 #!/bin/sh
-cd /usr/local/etc/Spane/games 2>/dev/null || cd /usr/local/etc/Spane
+# SPANE Game Engine - Runtime Script
+# Sets environment for proper gamedata persistence
+
+export SPANE_HOME="/usr/local/etc/Spane"
+export SPANE_GAMES_DIR="/usr/local/etc/Spane/games"
+
+# Change to games directory so gamedata is created in the right place
+cd "$SPANE_GAMES_DIR" 2>/dev/null || cd "$SPANE_HOME"
+
+# Run the engine
 exec /usr/local/etc/Spane/spane "$@"
 EOF
     $SUDO chmod 755 "$INSTALL_DIR/run_spane.sh"
     
     [ -L "$BIN_DIR/$BINARY_NAME" ] && $SUDO rm -f "$BIN_DIR/$BINARY_NAME"
     $SUDO ln -sf "$INSTALL_DIR/run_spane.sh" "$BIN_DIR/$BINARY_NAME"
+    
+    # Ensure games directory is writable for gamedata creation
+    $SUDO chmod 755 "$GAMES_DIR"
     
     log_message "✓ Installed"
 }
@@ -613,7 +655,7 @@ echo ""
 
 if [ -d "$INSTALL_DIR" ]; then
     log_message "Existing installation found"
-    printf "[1]=Update [2]=Remove [3]=Exit: "
+    printf "[1]=Update (preserve gamedata) [2]=Remove [3]=Exit: "
     read choice
     case "$choice" in
         1) 
@@ -625,20 +667,29 @@ if [ -d "$INSTALL_DIR" ]; then
                 install_x11_libs
             fi
             
-            perform_update
-            
-            games=$(ls "$GAMES_DIR"/*.so 2>/dev/null | wc -l)
-            
-            echo ""
-            echo "╔════════════════════════════════╗"
-            echo "║    Update Complete!            ║"
-            echo "║                                ║"
-            echo "║  ✓ Gamedata preserved          ║"
-            has_x11 && echo "║  spane          X11 mode       ║"
-            echo "║  spane --web    Web mode       ║"
-            echo "║  Games: $games                    ║"
-            echo "╚════════════════════════════════╝"
-            echo ""
+            if perform_update; then
+                games=$(ls "$GAMES_DIR"/*.so 2>/dev/null | wc -l)
+                
+                echo ""
+                echo "╔════════════════════════════════╗"
+                echo "║    Update Complete!            ║"
+                echo "║                                ║"
+                echo "║  ✓ Gamedata preserved          ║"
+                has_x11 && echo "║  spane          X11 mode       ║"
+                echo "║  spane --web    Web mode       ║"
+                echo "║  Games: $games                    ║"
+                echo "╚════════════════════════════════╝"
+                echo ""
+            else
+                echo ""
+                echo "╔════════════════════════════════╗"
+                echo "║    Update Failed!              ║"
+                echo "║                                ║"
+                echo "║  Check error messages above    ║"
+                echo "╚════════════════════════════════╝"
+                echo ""
+                exit 1
+            fi
             exit 0
             ;;
         2) uninstall_spane; exit 0 ;;
@@ -682,6 +733,9 @@ if compile_engine "$src"; then
     has_x11 && echo "║  spane          X11 mode       ║"
     echo "║  spane --web    Web mode       ║"
     echo "║  Games: $games                    ║"
+    echo "║                                ║"
+    echo "║  Game data will be saved in:   ║"
+    echo "║  $GAMES_DIR/gamedata/          ║"
     echo "╚════════════════════════════════╝"
     echo ""
 else
