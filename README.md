@@ -1,8 +1,8 @@
 ## PROJECT SPANE
 
-O **Spane Engine** é um ecossistema completo para o desenvolvimento de jogos no PC, projetado para transformar ideias em realidade de forma rápida e intuitiva. Através de uma abordagem **low-code**, ele substitui linhas complexas de código por uma interface visual poderosa de arrastar e soltar, permitindo que criadores de todos os níveis construam mecânicas, gerenciem assets e estruturem seus próprios jogos com total liberdade e eficiência.
+Lembra daquela sensação nostálgica de abrir um emulador para jogar os clássicos da sua infância? Agora, imagine canalizar toda essa energia e foco para o aprendizado. Um emulador de jogos educativos é a fusão perfeita entre o formato envolvente dos videogames e a absorção de conhecimento prático.
 
-
+A proposta não é criar apenas "jogguinhos de matemática sem graça", mas sim resgatar o espírito dos grandes clássicos, onde cada fase superada representa uma lição aprendida.
 
 ㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤ<img width="768" height="513" alt="image" src="https://github.com/user-attachments/assets/d8a8e2b5-809b-4ede-a733-b7d5d8709ca8" />
 
