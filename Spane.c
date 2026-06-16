@@ -9,6 +9,7 @@
 #include <X11/keysym.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
+#include <X11/cursorfont.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -199,6 +200,7 @@ struct GameManager {
     Window window;
     GC gc;
     XImage* ximage;
+    Cursor cursor;
     int x11_running;
     int web_mode;
     int dev_mode;
@@ -356,7 +358,7 @@ static void expand_path(const char* path, char* expanded, int max_len) {
 }
 
 // =============================================================================
-// SCREEN DIMENSIONS CALCULATION
+// SCREEN DIMENSIONS CALCULATION - FIXED for windowed mode
 // =============================================================================
 
 static void calculate_screen_dimensions(GameManager* gm) {
@@ -367,9 +369,24 @@ static void calculate_screen_dimensions(GameManager* gm) {
     gm->screen.screen_width = WidthOfScreen(screen);
     gm->screen.screen_height = HeightOfScreen(screen);
     
-    // Use full screen resolution
-    gm->screen.window_width = gm->screen.screen_width;
-    gm->screen.window_height = gm->screen.screen_height;
+    // Use fixed window size based on base resolution (not fullscreen)
+    // Use 80% of screen size or base resolution, whichever is smaller
+    gm->screen.window_width = BASE_WINDOW_WIDTH;
+    gm->screen.window_height = BASE_WINDOW_HEIGHT;
+    
+    // If screen is smaller, scale down; if larger, keep base size
+    if (gm->screen.screen_width < BASE_WINDOW_WIDTH) {
+        gm->screen.window_width = gm->screen.screen_width - 100;
+        gm->screen.window_height = (gm->screen.window_width * BASE_WINDOW_HEIGHT) / BASE_WINDOW_WIDTH;
+    }
+    if (gm->screen.screen_height < gm->screen.window_height + 50) {
+        gm->screen.window_height = gm->screen.screen_height - 100;
+        gm->screen.window_width = (gm->screen.window_height * BASE_WINDOW_WIDTH) / BASE_WINDOW_HEIGHT;
+    }
+    
+    // Ensure minimum window size
+    if (gm->screen.window_width < 640) gm->screen.window_width = 640;
+    if (gm->screen.window_height < 480) gm->screen.window_height = 480;
     
     // Calculate scale factors
     gm->screen.scale_x = (float)gm->screen.window_width / BASE_WINDOW_WIDTH;
@@ -378,7 +395,7 @@ static void calculate_screen_dimensions(GameManager* gm) {
     // Calculate sidebar width (proportional)
     gm->screen.sidebar_width = (int)(BASE_SIDEBAR_WIDTH * gm->screen.scale_x);
     if (gm->screen.sidebar_width < 120) gm->screen.sidebar_width = 120;
-    if (gm->screen.sidebar_width > 300) gm->screen.sidebar_width = 300;
+    if (gm->screen.sidebar_width > 250) gm->screen.sidebar_width = 250;
     
     // Calculate game area dimensions
     gm->screen.game_area_width = gm->screen.window_width - gm->screen.sidebar_width;
@@ -1560,7 +1577,7 @@ static void gm_fps(GameManager* gm) {
 }
 
 // =============================================================================
-// X11 - Updated for fullscreen with scaling (FIXED)
+// X11 - FIXED for windowed mode with mouse cursor and resize support
 // =============================================================================
 
 static void x11_mirror_frame(GameManager* gm) {
@@ -1568,14 +1585,14 @@ static void x11_mirror_frame(GameManager* gm) {
     
     pthread_mutex_lock(&gm->fb_mutex);
     
-    // Scale the base resolution framebuffer to screen resolution
+    // Scale the base resolution framebuffer to window resolution
     unsigned char* src = gm->framebuffer.pixels;
     char* dst = gm->ximage->data;
     
     // Clear destination
     memset(dst, 0, gm->screen.window_width * gm->screen.window_height * 4);
     
-    // Nearest-neighbor scaling from base resolution to screen resolution
+    // Nearest-neighbor scaling from base resolution to window resolution
     for (int sy = 0; sy < gm->screen.window_height; sy++) {
         for (int sx = 0; sx < gm->screen.window_width; sx++) {
             // Map screen pixel to base resolution pixel
@@ -1606,7 +1623,7 @@ static int x11_init(GameManager* gm) {
     gm->display = XOpenDisplay(NULL);
     if (!gm->display) return 0;
     
-    // Calculate screen dimensions first
+    // Calculate screen dimensions for windowed mode
     calculate_screen_dimensions(gm);
     
     gm->wm_delete_window = XInternAtom(gm->display, "WM_DELETE_WINDOW", False);
@@ -1614,69 +1631,76 @@ static int x11_init(GameManager* gm) {
     gm->wm_fullscreen = XInternAtom(gm->display, "_NET_WM_STATE_FULLSCREEN", False);
     
     int s = DefaultScreen(gm->display);
+    int black = BlackPixel(gm->display, s);
+    int white = WhitePixel(gm->display, s);
     
-    // Create a normal window first
+    // Create a normal window with title bar and borders
     gm->window = XCreateSimpleWindow(gm->display, RootWindow(gm->display, s),
-                                     0, 0, gm->screen.window_width, gm->screen.window_height, 0,
-                                     BlackPixel(gm->display, s), 0x1A1A1A);
+                                     0, 0, gm->screen.window_width, gm->screen.window_height, 1,
+                                     black, 0x1A1A1A);
     
+    // Set window title and class
+    XStoreName(gm->display, gm->window, "SPANE Game Engine");
+    XSetIconName(gm->display, gm->window, "SPANE");
+    
+    // Set WM_CLASS for proper window management
+    XClassHint class_hint;
+    class_hint.res_name = "spane";
+    class_hint.res_class = "SPANE";
+    XSetClassHint(gm->display, gm->window, &class_hint);
+    
+    // Set window manager protocols (close button)
     XSetWMProtocols(gm->display, gm->window, &gm->wm_delete_window, 1);
     
-    // Set window type hints
-    XSizeHints hints;
-    hints.flags = PPosition | PSize | PMinSize | PMaxSize;
-    hints.x = 0;
-    hints.y = 0;
-    hints.width = gm->screen.window_width;
-    hints.height = gm->screen.window_height;
-    hints.min_width = gm->screen.window_width;
-    hints.min_height = gm->screen.window_height;
-    hints.max_width = gm->screen.window_width;
-    hints.max_height = gm->screen.window_height;
-    XSetNormalHints(gm->display, gm->window, &hints);
+    // Set window size hints with minimum and maximum sizes
+    XSizeHints size_hints;
+    size_hints.flags = PPosition | PSize | PMinSize | PMaxSize | PResizeInc;
+    size_hints.x = 0;
+    size_hints.y = 0;
+    size_hints.width = gm->screen.window_width;
+    size_hints.height = gm->screen.window_height;
+    size_hints.min_width = 640;
+    size_hints.min_height = 480;
+    size_hints.max_width = gm->screen.screen_width;
+    size_hints.max_height = gm->screen.screen_height;
+    size_hints.width_inc = 1;
+    size_hints.height_inc = 1;
+    XSetNormalHints(gm->display, gm->window, &size_hints);
     
-    // Set window title
-    XStoreName(gm->display, gm->window, "SPANE Game Engine");
+    // Set window manager hints for proper decoration
+    XWMHints wm_hints;
+    wm_hints.flags = InputHint | StateHint;
+    wm_hints.input = True;
+    wm_hints.initial_state = NormalState;
+    XSetWMHints(gm->display, gm->window, &wm_hints);
     
+    // Create cursor (standard arrow cursor for windowed mode)
+    gm->cursor = XCreateFontCursor(gm->display, XC_left_ptr);
+    XDefineCursor(gm->display, gm->window, gm->cursor);
+    
+    // Select input events
     XSelectInput(gm->display, gm->window,
                  ExposureMask | KeyPressMask | KeyReleaseMask | ButtonPressMask | 
-                 ButtonReleaseMask | PointerMotionMask | StructureNotifyMask);
+                 ButtonReleaseMask | PointerMotionMask | StructureNotifyMask | 
+                 EnterWindowMask | LeaveWindowMask);
     
-    // Map the window first
+    // Map the window
     XMapWindow(gm->display, gm->window);
+    XFlush(gm->display);
     
     // Wait for window to be mapped
     XEvent e;
     do { XNextEvent(gm->display, &e); } while (e.type != MapNotify);
     
-    // Now request fullscreen via EWMH
-    XEvent xev;
-    memset(&xev, 0, sizeof(xev));
-    xev.type = ClientMessage;
-    xev.xclient.window = gm->window;
-    xev.xclient.message_type = gm->wm_state;
-    xev.xclient.format = 32;
-    xev.xclient.data.l[0] = 1;  // _NET_WM_STATE_ADD
-    xev.xclient.data.l[1] = gm->wm_fullscreen;
-    xev.xclient.data.l[2] = 0;
-    xev.xclient.data.l[3] = 1;  // Source: application
-    xev.xclient.data.l[4] = 0;
-    
-    XSendEvent(gm->display, DefaultRootWindow(gm->display), False,
-               SubstructureRedirectMask | SubstructureNotifyMask, &xev);
-    XFlush(gm->display);
-    
-    // Wait a moment for the window manager to process the fullscreen request
-    usleep(100000);
-    
+    // Create graphics context
     gm->gc = XCreateGC(gm->display, gm->window, 0, NULL);
     
-    // Create XImage for screen resolution
+    // Create XImage for window resolution
     char* imgdata = malloc(gm->screen.window_width * gm->screen.window_height * 4);
     gm->ximage = XCreateImage(gm->display, DefaultVisual(gm->display, s), 24, ZPixmap, 0,
                               imgdata, gm->screen.window_width, gm->screen.window_height, 32, 0);
     
-    printf("X11 ready (Fullscreen %dx%d)\n", gm->screen.window_width, gm->screen.window_height);
+    printf("X11 ready (Windowed mode %dx%d)\n", gm->screen.window_width, gm->screen.window_height);
     return 1;
 }
 
@@ -1718,6 +1742,51 @@ static void x11_process(GameManager* gm, int* running) {
                 printf("Window close requested via WM\n");
                 *running = 0;
                 return;
+            }
+        }
+        
+        if (e.type == ConfigureNotify) {
+            // Window was resized
+            int new_width = e.xconfigure.width;
+            int new_height = e.xconfigure.height;
+            
+            if (new_width != gm->screen.window_width || new_height != gm->screen.window_height) {
+                printf("Window resized to %dx%d\n", new_width, new_height);
+                
+                // Update window dimensions
+                gm->screen.window_width = new_width;
+                gm->screen.window_height = new_height;
+                
+                // Recalculate scale factors
+                gm->screen.scale_x = (float)gm->screen.window_width / BASE_WINDOW_WIDTH;
+                gm->screen.scale_y = (float)gm->screen.window_height / BASE_WINDOW_HEIGHT;
+                
+                // Recalculate sidebar width
+                gm->screen.sidebar_width = (int)(BASE_SIDEBAR_WIDTH * gm->screen.scale_x);
+                if (gm->screen.sidebar_width < 120) gm->screen.sidebar_width = 120;
+                if (gm->screen.sidebar_width > 250) gm->screen.sidebar_width = 250;
+                
+                // Recalculate game area
+                gm->screen.game_area_width = gm->screen.window_width - gm->screen.sidebar_width;
+                gm->screen.game_area_height = gm->screen.window_height;
+                gm->screen.game_area_x = gm->screen.sidebar_width;
+                gm->screen.game_area_y = 0;
+                
+                float game_scale_x = (float)gm->screen.game_area_width / BASE_GAME_AREA_WIDTH;
+                float game_scale_y = (float)gm->screen.game_area_height / BASE_GAME_AREA_HEIGHT;
+                gm->screen.game_scale = (game_scale_x < game_scale_y) ? game_scale_x : game_scale_y;
+                
+                // Recreate XImage with new dimensions
+                if (gm->ximage) {
+                    free(gm->ximage->data);
+                    gm->ximage->data = NULL;
+                    XDestroyImage(gm->ximage);
+                }
+                
+                int s = DefaultScreen(gm->display);
+                char* imgdata = malloc(gm->screen.window_width * gm->screen.window_height * 4);
+                gm->ximage = XCreateImage(gm->display, DefaultVisual(gm->display, s), 24, ZPixmap, 0,
+                                          imgdata, gm->screen.window_width, gm->screen.window_height, 32, 0);
             }
         }
         
@@ -1800,11 +1869,20 @@ static void x11_process(GameManager* gm, int* running) {
                 }
             }
         }
+        
+        // Handle mouse enter/leave for cursor visibility
+        if (e.type == EnterNotify) {
+            XDefineCursor(gm->display, gm->window, gm->cursor);
+        }
+        if (e.type == LeaveNotify) {
+            XUndefineCursor(gm->display, gm->window);
+        }
     }
 }
 
 static void x11_cleanup(GameManager* gm) {
     if (!gm) return;
+    if (gm->cursor) { XFreeCursor(gm->display, gm->cursor); gm->cursor = 0; }
     if (gm->ximage) { free(gm->ximage->data); gm->ximage->data = NULL; XDestroyImage(gm->ximage); gm->ximage = NULL; }
     if (gm->gc) { XFreeGC(gm->display, gm->gc); gm->gc = NULL; }
     if (gm->window) { XDestroyWindow(gm->display, gm->window); gm->window = 0; }
