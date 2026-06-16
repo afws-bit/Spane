@@ -9,6 +9,7 @@
 #include <X11/keysym.h>
 #include <X11/Xutil.h>
 #include <X11/Xatom.h>
+#include <X11/cursorfont.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -33,13 +34,15 @@
 // CONFIGURATION
 // =============================================================================
 
-#define MAIN_WINDOW_WIDTH  1000
-#define MAIN_WINDOW_HEIGHT 700
-#define GAME_AREA_WIDTH    800
-#define GAME_AREA_HEIGHT   600
-#define GAME_AREA_X        180
-#define GAME_AREA_Y        50
-#define SIDEBAR_WIDTH      160
+// Base design resolution (games are designed for this)
+#define BASE_WINDOW_WIDTH  1000
+#define BASE_WINDOW_HEIGHT 700
+#define BASE_GAME_AREA_WIDTH    800
+#define BASE_GAME_AREA_HEIGHT   600
+#define BASE_GAME_AREA_X        180
+#define BASE_GAME_AREA_Y        50
+#define BASE_SIDEBAR_WIDTH      160
+
 #define MAX_GAMES          20
 #define MAX_PATH           512
 
@@ -88,6 +91,25 @@ static const unsigned char font_5x7[][5] = {
 };
 
 // =============================================================================
+// SCREEN DIMENSIONS (Runtime determined)
+// =============================================================================
+
+typedef struct {
+    int screen_width;
+    int screen_height;
+    int window_width;
+    int window_height;
+    int game_area_width;
+    int game_area_height;
+    int game_area_x;
+    int game_area_y;
+    int sidebar_width;
+    float scale_x;
+    float scale_y;
+    float game_scale;
+} ScreenDimensions;
+
+// =============================================================================
 // SDK TYPES
 // =============================================================================
 
@@ -95,8 +117,9 @@ typedef struct Framebuffer Framebuffer;
 typedef struct Game Game;
 typedef struct GameManager GameManager;
 
+// Frame buffer uses base resolution for compatibility
 struct Framebuffer {
-    unsigned char pixels[MAIN_WINDOW_WIDTH * MAIN_WINDOW_HEIGHT * 4];
+    unsigned char pixels[BASE_WINDOW_WIDTH * BASE_WINDOW_HEIGHT * 4];
 };
 
 struct Game {
@@ -115,7 +138,7 @@ struct Game {
 };
 
 typedef struct {
-    unsigned char framebuffer[MAIN_WINDOW_WIDTH * MAIN_WINDOW_HEIGHT * 4];
+    unsigned char framebuffer[BASE_WINDOW_WIDTH * BASE_WINDOW_HEIGHT * 4];
     int ready;
     int running;
     int has_error;
@@ -177,6 +200,7 @@ struct GameManager {
     Window window;
     GC gc;
     XImage* ximage;
+    Cursor cursor;
     int x11_running;
     int web_mode;
     int dev_mode;
@@ -189,6 +213,10 @@ struct GameManager {
     char state_dir[512];
     
     Atom wm_delete_window;
+    Atom wm_state;
+    Atom wm_fullscreen;
+    
+    ScreenDimensions screen;
 };
 
 // =============================================================================
@@ -211,6 +239,7 @@ static void send_input_to_game(GameManager* gm, GameProcess* game, int type, int
 static void game_process_main(GameManager* gm, GameProcess* game);
 static void render_error_dialog(Framebuffer* fb, GameProcess* game, GameManager* gm);
 static void copy_to_clipboard(const char* text);
+static void calculate_screen_dimensions(GameManager* gm);
 
 // =============================================================================
 // SPINLOCK
@@ -273,8 +302,8 @@ static void copy_to_clipboard(const char* text) {
 // =============================================================================
 
 static inline void fb_pixel(Framebuffer* fb, int x, int y, unsigned char r, unsigned char g, unsigned char b) {
-    if (x < 0 || x >= MAIN_WINDOW_WIDTH || y < 0 || y >= MAIN_WINDOW_HEIGHT) return;
-    int i = (y * MAIN_WINDOW_WIDTH + x) * 4;
+    if (x < 0 || x >= BASE_WINDOW_WIDTH || y < 0 || y >= BASE_WINDOW_HEIGHT) return;
+    int i = (y * BASE_WINDOW_WIDTH + x) * 4;
     fb->pixels[i]=r; fb->pixels[i+1]=g; fb->pixels[i+2]=b; fb->pixels[i+3]=255;
 }
 
@@ -283,8 +312,8 @@ static void fb_fill(Framebuffer* fb, int x, int y, int w, int h, unsigned char r
     int end_y = y + h;
     if (x < 0) x = 0;
     if (y < 0) y = 0;
-    if (end_x > MAIN_WINDOW_WIDTH) end_x = MAIN_WINDOW_WIDTH;
-    if (end_y > MAIN_WINDOW_HEIGHT) end_y = MAIN_WINDOW_HEIGHT;
+    if (end_x > BASE_WINDOW_WIDTH) end_x = BASE_WINDOW_WIDTH;
+    if (end_y > BASE_WINDOW_HEIGHT) end_y = BASE_WINDOW_HEIGHT;
     for (int dy=y; dy<end_y; dy++)
         for (int dx=x; dx<end_x; dx++)
             fb_pixel(fb, dx, dy, r, g, b);
@@ -326,6 +355,88 @@ static void expand_path(const char* path, char* expanded, int max_len) {
         strncpy(expanded, path, max_len - 1);
         expanded[max_len-1] = 0;
     }
+}
+
+// =============================================================================
+// SCREEN DIMENSIONS CALCULATION - FIXED for windowed mode
+// =============================================================================
+
+static void calculate_screen_dimensions(GameManager* gm) {
+    if (!gm) return;
+    
+    // Detect screen size
+    Screen* screen = DefaultScreenOfDisplay(gm->display);
+    gm->screen.screen_width = WidthOfScreen(screen);
+    gm->screen.screen_height = HeightOfScreen(screen);
+    
+    // Use fixed window size based on base resolution (not fullscreen)
+    // Use 80% of screen size or base resolution, whichever is smaller
+    gm->screen.window_width = BASE_WINDOW_WIDTH;
+    gm->screen.window_height = BASE_WINDOW_HEIGHT;
+    
+    // If screen is smaller, scale down; if larger, keep base size
+    if (gm->screen.screen_width < BASE_WINDOW_WIDTH) {
+        gm->screen.window_width = gm->screen.screen_width - 100;
+        gm->screen.window_height = (gm->screen.window_width * BASE_WINDOW_HEIGHT) / BASE_WINDOW_WIDTH;
+    }
+    if (gm->screen.screen_height < gm->screen.window_height + 50) {
+        gm->screen.window_height = gm->screen.screen_height - 100;
+        gm->screen.window_width = (gm->screen.window_height * BASE_WINDOW_WIDTH) / BASE_WINDOW_HEIGHT;
+    }
+    
+    // Ensure minimum window size
+    if (gm->screen.window_width < 640) gm->screen.window_width = 640;
+    if (gm->screen.window_height < 480) gm->screen.window_height = 480;
+    
+    // Calculate scale factors
+    gm->screen.scale_x = (float)gm->screen.window_width / BASE_WINDOW_WIDTH;
+    gm->screen.scale_y = (float)gm->screen.window_height / BASE_WINDOW_HEIGHT;
+    
+    // Calculate sidebar width (proportional)
+    gm->screen.sidebar_width = (int)(BASE_SIDEBAR_WIDTH * gm->screen.scale_x);
+    if (gm->screen.sidebar_width < 120) gm->screen.sidebar_width = 120;
+    if (gm->screen.sidebar_width > 250) gm->screen.sidebar_width = 250;
+    
+    // Calculate game area dimensions
+    gm->screen.game_area_width = gm->screen.window_width - gm->screen.sidebar_width;
+    gm->screen.game_area_height = gm->screen.window_height;
+    
+    // Game area starts after sidebar
+    gm->screen.game_area_x = gm->screen.sidebar_width;
+    gm->screen.game_area_y = 0;
+    
+    // Scale for game rendering (maintain aspect ratio within game area)
+    float game_scale_x = (float)gm->screen.game_area_width / BASE_GAME_AREA_WIDTH;
+    float game_scale_y = (float)gm->screen.game_area_height / BASE_GAME_AREA_HEIGHT;
+    gm->screen.game_scale = (game_scale_x < game_scale_y) ? game_scale_x : game_scale_y;
+    
+    printf("Screen: %dx%d, Window: %dx%d, Sidebar: %d, Game Area: %dx%d at (%d,%d), Game Scale: %.2f\n",
+           gm->screen.screen_width, gm->screen.screen_height,
+           gm->screen.window_width, gm->screen.window_height,
+           gm->screen.sidebar_width,
+           gm->screen.game_area_width, gm->screen.game_area_height,
+           gm->screen.game_area_x, gm->screen.game_area_y,
+           gm->screen.game_scale);
+}
+
+// =============================================================================
+// COORDINATE MAPPING FUNCTIONS
+// =============================================================================
+
+// Map screen coordinates to base coordinates for game input
+static void screen_to_base_coords(GameManager* gm, int screen_x, int screen_y, int* base_x, int* base_y) {
+    if (!gm || !base_x || !base_y) return;
+    
+    *base_x = (int)(screen_x / gm->screen.scale_x);
+    *base_y = (int)(screen_y / gm->screen.scale_y);
+}
+
+// Map base coordinates to screen coordinates for rendering
+static void base_to_screen_coords(GameManager* gm, int base_x, int base_y, int* screen_x, int* screen_y) {
+    if (!gm || !screen_x || !screen_y) return;
+    
+    *screen_x = (int)(base_x * gm->screen.scale_x);
+    *screen_y = (int)(base_y * gm->screen.scale_y);
 }
 
 // =============================================================================
@@ -544,14 +655,14 @@ static void render_error_dialog(Framebuffer* fb, GameProcess* game, GameManager*
     if (!game || !fb) return;
     
     int dh = gm->dev_mode ? 320 : 280;
-    int dx = GAME_AREA_X + 100;
-    int dy = GAME_AREA_Y + 150;
-    int dw = GAME_AREA_WIDTH - 200;
+    int dx = BASE_GAME_AREA_X + 100;
+    int dy = BASE_GAME_AREA_Y + 150;
+    int dw = BASE_GAME_AREA_WIDTH - 200;
     
     // Dim the game area behind dialog
-    for (int yy = GAME_AREA_Y; yy < GAME_AREA_Y + GAME_AREA_HEIGHT; yy++) {
-        for (int xx = GAME_AREA_X; xx < GAME_AREA_X + GAME_AREA_WIDTH; xx++) {
-            int i = (yy * MAIN_WINDOW_WIDTH + xx) * 4;
+    for (int yy = BASE_GAME_AREA_Y; yy < BASE_GAME_AREA_Y + BASE_GAME_AREA_HEIGHT; yy++) {
+        for (int xx = BASE_GAME_AREA_X; xx < BASE_GAME_AREA_X + BASE_GAME_AREA_WIDTH; xx++) {
+            int i = (yy * BASE_WINDOW_WIDTH + xx) * 4;
             fb->pixels[i] = fb->pixels[i] / 3;
             fb->pixels[i+1] = fb->pixels[i+1] / 3;
             fb->pixels[i+2] = fb->pixels[i+2] / 3;
@@ -1192,11 +1303,13 @@ static void gm_render(GameManager* gm) {
     pthread_mutex_lock(&gm->fb_mutex);
     Framebuffer* fb = &gm->framebuffer;
     
-    fb_fill(fb, 0, 0, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, 0x1A, 0x1A, 0x1A);
+    // Render to base resolution framebuffer
+    fb_fill(fb, 0, 0, BASE_WINDOW_WIDTH, BASE_WINDOW_HEIGHT, 0x1A, 0x1A, 0x1A);
     
-    fb_fill(fb, 0, 0, SIDEBAR_WIDTH, MAIN_WINDOW_HEIGHT, 0x15, 0x15, 0x18);
-    fb_text_center(fb, 0, 15, SIDEBAR_WIDTH, "SPANE ENGINE", 0x00, 0xCC, 0xFF);
-    fb_fill(fb, 10, 35, SIDEBAR_WIDTH-20, 2, 0x00, 0x88, 0xCC);
+    // Sidebar
+    fb_fill(fb, 0, 0, BASE_SIDEBAR_WIDTH, BASE_WINDOW_HEIGHT, 0x15, 0x15, 0x18);
+    fb_text_center(fb, 0, 15, BASE_SIDEBAR_WIDTH, "SPANE ENGINE", 0x00, 0xCC, 0xFF);
+    fb_fill(fb, 10, 35, BASE_SIDEBAR_WIDTH-20, 2, 0x00, 0x88, 0xCC);
     
     if (gm->dev_mode) {
         fb_text(fb, 10, 40, "DEV", 0x00, 0xFF, 0x00);
@@ -1217,14 +1330,14 @@ static void gm_render(GameManager* gm) {
         else if (hov) { sr = 0xCC; sg = 0x88; sb = 0x00; }
         else { sr = 0x25; sg = 0x25; sb = 0x2A; }
         
-        fb_fill(fb, 10, by, SIDEBAR_WIDTH-35, 35, sr, sg, sb);
-        fb_rect(fb, 10, by, SIDEBAR_WIDTH-35, 35, 
+        fb_fill(fb, 10, by, BASE_SIDEBAR_WIDTH-35, 35, sr, sg, sb);
+        fb_rect(fb, 10, by, BASE_SIDEBAR_WIDTH-35, 35, 
                 gp->has_error ? 0xFF : (act ? 0x00:0x44),
                 gp->has_error ? 0x44 : (act ? 0xCC:0x44),
-                gp->has_error ? 0x44 : (act ? 0xFF:0x44));
-        fb_text_center(fb, 10, by+12, SIDEBAR_WIDTH-35, gp->name, 0xFF, 0xFF, 0xFF);
+                gp->has_error ? 0x44 : (act ? 0xCC:0x44));
+        fb_text_center(fb, 10, by+12, BASE_SIDEBAR_WIDTH-35, gp->name, 0xFF, 0xFF, 0xFF);
         
-        int cx = SIDEBAR_WIDTH - 30;
+        int cx = BASE_SIDEBAR_WIDTH - 30;
         fb_fill(fb, cx, by + 8, 16, 16, 0x88, 0x22, 0x22);
         fb_rect(fb, cx, by + 8, 16, 16, 0xFF, 0x44, 0x44);
         fb_text(fb, cx + 4, by + 12, "X", 0xFF, 0xFF, 0xFF);
@@ -1232,23 +1345,23 @@ static void gm_render(GameManager* gm) {
         by += 45;
     }
     
-    int lby = MAIN_WINDOW_HEIGHT - 110;
+    int lby = BASE_WINDOW_HEIGHT - 110;
     
-    fb_fill(fb, 10, lby, SIDEBAR_WIDTH-20, 28, 0x00, 0x66, 0x00);
-    fb_rect(fb, 10, lby, SIDEBAR_WIDTH-20, 28, 0x00, 0x88, 0x00);
-    fb_text_center(fb, 10, lby+8, SIDEBAR_WIDTH-20, "[ Load Game ]", 0xFF, 0xFF, 0xFF);
+    fb_fill(fb, 10, lby, BASE_SIDEBAR_WIDTH-20, 28, 0x00, 0x66, 0x00);
+    fb_rect(fb, 10, lby, BASE_SIDEBAR_WIDTH-20, 28, 0x00, 0x88, 0x00);
+    fb_text_center(fb, 10, lby+8, BASE_SIDEBAR_WIDTH-20, "[ Load Game ]", 0xFF, 0xFF, 0xFF);
     
-    fb_fill(fb, 10, lby+33, SIDEBAR_WIDTH-20, 28, 0x66, 0x00, 0x00);
-    fb_rect(fb, 10, lby+33, SIDEBAR_WIDTH-20, 28, 0x88, 0x00, 0x00);
-    fb_text_center(fb, 10, lby+41, SIDEBAR_WIDTH-20, "[ Clear All ]", 0xFF, 0xFF, 0xFF);
+    fb_fill(fb, 10, lby+33, BASE_SIDEBAR_WIDTH-20, 28, 0x66, 0x00, 0x00);
+    fb_rect(fb, 10, lby+33, BASE_SIDEBAR_WIDTH-20, 28, 0x88, 0x00, 0x00);
+    fb_text_center(fb, 10, lby+41, BASE_SIDEBAR_WIDTH-20, "[ Clear All ]", 0xFF, 0xFF, 0xFF);
     
     char info[64];
     snprintf(info, sizeof(info), "FPS:%.1f Inst:%d %s%s", gm->fps, gm->instance_id + 1,
              gm->web_mode ? "WEB" : "X11", gm->dev_mode ? " DEV" : "");
-    fb_text(fb, 10, MAIN_WINDOW_HEIGHT - 25, info, 0x88, 0x88, 0x88);
+    fb_text(fb, 10, BASE_WINDOW_HEIGHT - 25, info, 0x88, 0x88, 0x88);
     
-    fb_rect(fb, GAME_AREA_X-1, GAME_AREA_Y-1, GAME_AREA_WIDTH+2, GAME_AREA_HEIGHT+2, 0x44, 0x44, 0x55);
-    fb_rect(fb, GAME_AREA_X-2, GAME_AREA_Y-2, GAME_AREA_WIDTH+4, GAME_AREA_HEIGHT+4, 0x44, 0x44, 0x55);
+    fb_rect(fb, BASE_GAME_AREA_X-1, BASE_GAME_AREA_Y-1, BASE_GAME_AREA_WIDTH+2, BASE_GAME_AREA_HEIGHT+2, 0x44, 0x44, 0x55);
+    fb_rect(fb, BASE_GAME_AREA_X-2, BASE_GAME_AREA_Y-2, BASE_GAME_AREA_WIDTH+4, BASE_GAME_AREA_HEIGHT+4, 0x44, 0x44, 0x55);
     
     if (gm->current_game >= 0 && gm->current_game < gm->game_count) {
         GameProcess* game = gm->games[gm->current_game];
@@ -1257,9 +1370,10 @@ static void gm_render(GameManager* gm) {
         if (game->shm && !game->has_error) {
             game_shm_lock(game->shm);
             if (game->shm->frame_ready) {
-                for (int gy = 0; gy < GAME_AREA_HEIGHT; gy++) {
-                    for (int gx = 0; gx < GAME_AREA_WIDTH; gx++) {
-                        int src_idx = ((gy + GAME_AREA_Y) * MAIN_WINDOW_WIDTH + (gx + GAME_AREA_X)) * 4;
+                // Copy game framebuffer directly (both use base resolution)
+                for (int gy = 0; gy < BASE_GAME_AREA_HEIGHT; gy++) {
+                    for (int gx = 0; gx < BASE_GAME_AREA_WIDTH; gx++) {
+                        int src_idx = ((gy + BASE_GAME_AREA_Y) * BASE_WINDOW_WIDTH + (gx + BASE_GAME_AREA_X)) * 4;
                         int dst_idx = src_idx;
                         fb->pixels[dst_idx] = game->shm->framebuffer[src_idx];
                         fb->pixels[dst_idx + 1] = game->shm->framebuffer[src_idx + 1];
@@ -1275,7 +1389,7 @@ static void gm_render(GameManager* gm) {
         snprintf(lb, sizeof(lb), "Game: %s%s", 
                 game->name[0] ? game->name : "Unknown",
                 game->has_error ? " [CRASHED]" : (game->active ? "" : " [LOADING]"));
-        fb_text(fb, GAME_AREA_X, GAME_AREA_Y-15, lb, 
+        fb_text(fb, BASE_GAME_AREA_X, BASE_GAME_AREA_Y-15, lb, 
                 game->has_error ? 0xFF : 0xCC, 
                 game->has_error ? 0x44 : 0xCC, 
                 game->has_error ? 0x44 : 0xCC);
@@ -1286,7 +1400,7 @@ static void gm_render(GameManager* gm) {
     } else {
 no_game:
         if (gm->game_count == 0) {
-            fb_text_center(fb, GAME_AREA_X, GAME_AREA_Y + GAME_AREA_HEIGHT/2, GAME_AREA_WIDTH,
+            fb_text_center(fb, BASE_GAME_AREA_X, BASE_GAME_AREA_Y + BASE_GAME_AREA_HEIGHT/2, BASE_GAME_AREA_WIDTH,
                            "Click [Load Game] to add a game", 0x66, 0x66, 0x66);
         }
     }
@@ -1303,21 +1417,20 @@ static void gm_switch(GameManager* gm, int i) {
 }
 
 // =============================================================================
-// CRITICAL FIX: gm_click - Process sidebar clicks FIRST, then error dialog
+// gm_click - Process sidebar clicks FIRST, then error dialog
 // =============================================================================
 
 static void gm_click(GameManager* gm, int x, int y) {
     if (!gm) return;
     
-    // ============================================
-    // PRIORITY 1: Always handle sidebar clicks first
-    // This allows switching games even when error dialog is showing
-    // ============================================
+    // Map screen coordinates to base coordinates
+    int base_x, base_y;
+    screen_to_base_coords(gm, x, y, &base_x, &base_y);
     
     // Check Load Game and Clear All buttons (bottom of sidebar)
-    int lby = MAIN_WINDOW_HEIGHT - 110;
-    if (x >= 10 && x < SIDEBAR_WIDTH-10) {
-        if (y >= lby && y < lby+28) {
+    int lby = BASE_WINDOW_HEIGHT - 110;
+    if (base_x >= 10 && base_x < BASE_SIDEBAR_WIDTH-10) {
+        if (base_y >= lby && base_y < lby+28) {
             printf("Load Game button clicked\n");
             int ret __attribute__((unused));
             ret = system("zenity --file-selection --title=\"Select Game .so file\" "
@@ -1340,7 +1453,7 @@ static void gm_click(GameManager* gm, int x, int y) {
             return;
         }
         
-        if (y >= lby+33 && y < lby+61) {
+        if (base_y >= lby+33 && base_y < lby+61) {
             printf("Clear All button clicked\n");
             for (int i = 0; i < gm->game_count; i++) {
                 if (gm->games[i]) {
@@ -1357,56 +1470,48 @@ static void gm_click(GameManager* gm, int x, int y) {
     }
     
     // Check sidebar game list (X buttons and game selection)
-    if (x < SIDEBAR_WIDTH) {
+    if (base_x < BASE_SIDEBAR_WIDTH) {
         int by = gm->dev_mode ? 65 : 55;
         for (int i = 0; i < gm->game_count; i++) {
             GameProcess* gp = gm->games[i];
             if (!gp) { by += 45; continue; }
             
-            int cx = SIDEBAR_WIDTH - 30;
+            int cx = BASE_SIDEBAR_WIDTH - 30;
             // X button to remove game
-            if (x >= cx && x < cx+16 && y >= by+8 && y < by+24) {
+            if (base_x >= cx && base_x < cx+16 && base_y >= by+8 && base_y < by+24) {
                 printf("X button clicked for game: %s\n", gp->name);
                 remove_game_instance(gm, i);
                 return;
             }
             // Game selection
-            if (y >= by && y < by+35 && x >= 10 && x < cx-2) {
+            if (base_y >= by && base_y < by+35 && base_x >= 10 && base_x < cx-2) {
                 printf("Switching to game: %s (index %d)\n", gp->name, i);
                 gm_switch(gm, i);
                 return;
             }
             by += 45;
         }
-        // Click on sidebar but not on a game - do nothing
         return;
     }
     
-    // ============================================
-    // PRIORITY 2: Handle error dialog buttons
-    // Only if click is within the game area AND
-    // current game has an active error dialog
-    // ============================================
-    
+    // Handle error dialog buttons
     if (gm->current_game >= 0 && gm->current_game < gm->game_count) {
         GameProcess* game = gm->games[gm->current_game];
         if (game && game->error_dialog && game->has_error) {
-            int dx = GAME_AREA_X + 100;
-            int dy = GAME_AREA_Y + 150;
-            int dw = GAME_AREA_WIDTH - 200;
+            int dx = BASE_GAME_AREA_X + 100;
+            int dy = BASE_GAME_AREA_Y + 150;
+            int dw = BASE_GAME_AREA_WIDTH - 200;
             int dh = gm->dev_mode ? 320 : 280;
             int btn_w = 130;
             int btn_h = 40;
             int btn_y = dy + dh - 80;
             
-            // Check if click is inside the dialog area
-            if (x >= dx && x < dx + dw && y >= dy && y < dy + dh) {
+            if (base_x >= dx && base_x < dx + dw && base_y >= dy && base_y < dy + dh) {
                 int restart_x = dx + (dw/2) - btn_w - 15;
                 int close_x = dx + (dw/2) + 15;
                 
-                // Restart button
-                if (x >= restart_x && x < restart_x + btn_w &&
-                    y >= btn_y && y < btn_y + btn_h) {
+                if (base_x >= restart_x && base_x < restart_x + btn_w &&
+                    base_y >= btn_y && base_y < btn_y + btn_h) {
                     printf("Restarting game '%s'...\n", game->name);
                     game->restart_count++;
                     game->has_error = 0;
@@ -1418,21 +1523,19 @@ static void gm_click(GameManager* gm, int x, int y) {
                     return;
                 }
                 
-                // Close button
-                if (x >= close_x && x < close_x + btn_w &&
-                    y >= btn_y && y < btn_y + btn_h) {
+                if (base_x >= close_x && base_x < close_x + btn_w &&
+                    base_y >= btn_y && base_y < btn_y + btn_h) {
                     printf("Closing game '%s'\n", game->name);
                     remove_game_instance(gm, gm->current_game);
                     return;
                 }
                 
-                // Copy error button (dev mode only)
                 if (gm->dev_mode) {
                     int copy_y = btn_y + btn_h + 10;
                     int copy_x = dx + (dw/2) - btn_w/2;
                     
-                    if (x >= copy_x && x < copy_x + btn_w &&
-                        y >= copy_y && y < copy_y + btn_h - 5) {
+                    if (base_x >= copy_x && base_x < copy_x + btn_w &&
+                        base_y >= copy_y && base_y < copy_y + btn_h - 5) {
                         printf("Copying error to clipboard\n");
                         char clipboard_text[2048];
                         snprintf(clipboard_text, sizeof(clipboard_text), 
@@ -1451,17 +1554,13 @@ static void gm_click(GameManager* gm, int x, int y) {
                     }
                 }
                 
-                // Click inside dialog but not on any button - ignore
                 return;
             }
         }
         
-        // ============================================
-        // PRIORITY 3: Forward click to active game
-        // Only if game is active and has no error
-        // ============================================
+        // Forward click to active game (in base coordinates)
         if (game && game->active && !game->has_error && !game->error_dialog) {
-            send_input_to_game(gm, game, 2, 0, 0, x, y);
+            send_input_to_game(gm, game, 2, 0, 0, base_x, base_y);
         }
     }
 }
@@ -1478,21 +1577,42 @@ static void gm_fps(GameManager* gm) {
 }
 
 // =============================================================================
-// X11
+// X11 - FIXED for windowed mode with mouse cursor and resize support
 // =============================================================================
 
 static void x11_mirror_frame(GameManager* gm) {
     if (!gm || !gm->display || !gm->ximage) return;
+    
     pthread_mutex_lock(&gm->fb_mutex);
+    
+    // Scale the base resolution framebuffer to window resolution
     unsigned char* src = gm->framebuffer.pixels;
     char* dst = gm->ximage->data;
-    for (int i = 0; i < MAIN_WINDOW_WIDTH * MAIN_WINDOW_HEIGHT; i++) {
-        dst[i*4+0] = src[i*4+2];
-        dst[i*4+1] = src[i*4+1];
-        dst[i*4+2] = src[i*4+0];
-        dst[i*4+3] = 0;
+    
+    // Clear destination
+    memset(dst, 0, gm->screen.window_width * gm->screen.window_height * 4);
+    
+    // Nearest-neighbor scaling from base resolution to window resolution
+    for (int sy = 0; sy < gm->screen.window_height; sy++) {
+        for (int sx = 0; sx < gm->screen.window_width; sx++) {
+            // Map screen pixel to base resolution pixel
+            int bx = (int)(sx / gm->screen.scale_x);
+            int by = (int)(sy / gm->screen.scale_y);
+            
+            if (bx >= 0 && bx < BASE_WINDOW_WIDTH && by >= 0 && by < BASE_WINDOW_HEIGHT) {
+                int src_idx = (by * BASE_WINDOW_WIDTH + bx) * 4;
+                int dst_idx = (sy * gm->screen.window_width + sx) * 4;
+                
+                dst[dst_idx + 0] = src[src_idx + 2];  // BGR format for X11
+                dst[dst_idx + 1] = src[src_idx + 1];
+                dst[dst_idx + 2] = src[src_idx + 0];
+                dst[dst_idx + 3] = 0;
+            }
+        }
     }
-    XPutImage(gm->display, gm->window, gm->gc, gm->ximage, 0, 0, 0, 0, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT);
+    
+    XPutImage(gm->display, gm->window, gm->gc, gm->ximage, 0, 0, 0, 0, 
+              gm->screen.window_width, gm->screen.window_height);
     XFlush(gm->display);
     pthread_mutex_unlock(&gm->fb_mutex);
 }
@@ -1503,29 +1623,84 @@ static int x11_init(GameManager* gm) {
     gm->display = XOpenDisplay(NULL);
     if (!gm->display) return 0;
     
+    // Calculate screen dimensions for windowed mode
+    calculate_screen_dimensions(gm);
+    
     gm->wm_delete_window = XInternAtom(gm->display, "WM_DELETE_WINDOW", False);
+    gm->wm_state = XInternAtom(gm->display, "_NET_WM_STATE", False);
+    gm->wm_fullscreen = XInternAtom(gm->display, "_NET_WM_STATE_FULLSCREEN", False);
     
     int s = DefaultScreen(gm->display);
-    gm->window = XCreateSimpleWindow(gm->display, RootWindow(gm->display, s),
-                                     50, 50, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, 1,
-                                     BlackPixel(gm->display, s), 0x1A1A1A);
+    int black = BlackPixel(gm->display, s);
+    int white = WhitePixel(gm->display, s);
     
+    // Create a normal window with title bar and borders
+    gm->window = XCreateSimpleWindow(gm->display, RootWindow(gm->display, s),
+                                     0, 0, gm->screen.window_width, gm->screen.window_height, 1,
+                                     black, 0x1A1A1A);
+    
+    // Set window title and class
+    XStoreName(gm->display, gm->window, "SPANE Game Engine");
+    XSetIconName(gm->display, gm->window, "SPANE");
+    
+    // Set WM_CLASS for proper window management
+    XClassHint class_hint;
+    class_hint.res_name = "spane";
+    class_hint.res_class = "SPANE";
+    XSetClassHint(gm->display, gm->window, &class_hint);
+    
+    // Set window manager protocols (close button)
     XSetWMProtocols(gm->display, gm->window, &gm->wm_delete_window, 1);
     
+    // Set window size hints with minimum and maximum sizes
+    XSizeHints size_hints;
+    size_hints.flags = PPosition | PSize | PMinSize | PMaxSize | PResizeInc;
+    size_hints.x = 0;
+    size_hints.y = 0;
+    size_hints.width = gm->screen.window_width;
+    size_hints.height = gm->screen.window_height;
+    size_hints.min_width = 640;
+    size_hints.min_height = 480;
+    size_hints.max_width = gm->screen.screen_width;
+    size_hints.max_height = gm->screen.screen_height;
+    size_hints.width_inc = 1;
+    size_hints.height_inc = 1;
+    XSetNormalHints(gm->display, gm->window, &size_hints);
+    
+    // Set window manager hints for proper decoration
+    XWMHints wm_hints;
+    wm_hints.flags = InputHint | StateHint;
+    wm_hints.input = True;
+    wm_hints.initial_state = NormalState;
+    XSetWMHints(gm->display, gm->window, &wm_hints);
+    
+    // Create cursor (standard arrow cursor for windowed mode)
+    gm->cursor = XCreateFontCursor(gm->display, XC_left_ptr);
+    XDefineCursor(gm->display, gm->window, gm->cursor);
+    
+    // Select input events
     XSelectInput(gm->display, gm->window,
                  ExposureMask | KeyPressMask | KeyReleaseMask | ButtonPressMask | 
-                 ButtonReleaseMask | PointerMotionMask | StructureNotifyMask);
-    XStoreName(gm->display, gm->window, "SPANE Game Engine");
+                 ButtonReleaseMask | PointerMotionMask | StructureNotifyMask | 
+                 EnterWindowMask | LeaveWindowMask);
+    
+    // Map the window
     XMapWindow(gm->display, gm->window);
-    gm->gc = XCreateGC(gm->display, gm->window, 0, NULL);
+    XFlush(gm->display);
     
-    char* imgdata = malloc(MAIN_WINDOW_WIDTH * MAIN_WINDOW_HEIGHT * 4);
-    gm->ximage = XCreateImage(gm->display, DefaultVisual(gm->display, s), 24, ZPixmap, 0,
-                              imgdata, MAIN_WINDOW_WIDTH, MAIN_WINDOW_HEIGHT, 32, 0);
-    
+    // Wait for window to be mapped
     XEvent e;
     do { XNextEvent(gm->display, &e); } while (e.type != MapNotify);
-    printf("X11 ready\n");
+    
+    // Create graphics context
+    gm->gc = XCreateGC(gm->display, gm->window, 0, NULL);
+    
+    // Create XImage for window resolution
+    char* imgdata = malloc(gm->screen.window_width * gm->screen.window_height * 4);
+    gm->ximage = XCreateImage(gm->display, DefaultVisual(gm->display, s), 24, ZPixmap, 0,
+                              imgdata, gm->screen.window_width, gm->screen.window_height, 32, 0);
+    
+    printf("X11 ready (Windowed mode %dx%d)\n", gm->screen.window_width, gm->screen.window_height);
     return 1;
 }
 
@@ -1570,6 +1745,51 @@ static void x11_process(GameManager* gm, int* running) {
             }
         }
         
+        if (e.type == ConfigureNotify) {
+            // Window was resized
+            int new_width = e.xconfigure.width;
+            int new_height = e.xconfigure.height;
+            
+            if (new_width != gm->screen.window_width || new_height != gm->screen.window_height) {
+                printf("Window resized to %dx%d\n", new_width, new_height);
+                
+                // Update window dimensions
+                gm->screen.window_width = new_width;
+                gm->screen.window_height = new_height;
+                
+                // Recalculate scale factors
+                gm->screen.scale_x = (float)gm->screen.window_width / BASE_WINDOW_WIDTH;
+                gm->screen.scale_y = (float)gm->screen.window_height / BASE_WINDOW_HEIGHT;
+                
+                // Recalculate sidebar width
+                gm->screen.sidebar_width = (int)(BASE_SIDEBAR_WIDTH * gm->screen.scale_x);
+                if (gm->screen.sidebar_width < 120) gm->screen.sidebar_width = 120;
+                if (gm->screen.sidebar_width > 250) gm->screen.sidebar_width = 250;
+                
+                // Recalculate game area
+                gm->screen.game_area_width = gm->screen.window_width - gm->screen.sidebar_width;
+                gm->screen.game_area_height = gm->screen.window_height;
+                gm->screen.game_area_x = gm->screen.sidebar_width;
+                gm->screen.game_area_y = 0;
+                
+                float game_scale_x = (float)gm->screen.game_area_width / BASE_GAME_AREA_WIDTH;
+                float game_scale_y = (float)gm->screen.game_area_height / BASE_GAME_AREA_HEIGHT;
+                gm->screen.game_scale = (game_scale_x < game_scale_y) ? game_scale_x : game_scale_y;
+                
+                // Recreate XImage with new dimensions
+                if (gm->ximage) {
+                    free(gm->ximage->data);
+                    gm->ximage->data = NULL;
+                    XDestroyImage(gm->ximage);
+                }
+                
+                int s = DefaultScreen(gm->display);
+                char* imgdata = malloc(gm->screen.window_width * gm->screen.window_height * 4);
+                gm->ximage = XCreateImage(gm->display, DefaultVisual(gm->display, s), 24, ZPixmap, 0,
+                                          imgdata, gm->screen.window_width, gm->screen.window_height, 32, 0);
+            }
+        }
+        
         if (e.type == KeyPress) {
             int k = x11_to_keycode(XLookupKeysym(&e.xkey, 0));
             if (k >= 112 && k <= 115) gm_switch(gm, k - 112);
@@ -1593,15 +1813,20 @@ static void x11_process(GameManager* gm, int* running) {
         else if (e.type == MotionNotify) {
             gm->mouse_x = e.xmotion.x;
             gm->mouse_y = e.xmotion.y;
+            
+            // Map to base coordinates for hover tracking
+            int base_x, base_y;
+            screen_to_base_coords(gm, e.xmotion.x, e.xmotion.y, &base_x, &base_y);
+            
             gm->hover_button = -1;
             
             // Hover tracking for error dialog buttons
             if (gm->current_game >= 0 && gm->current_game < gm->game_count) {
                 GameProcess* game = gm->games[gm->current_game];
                 if (game && game->error_dialog && game->has_error) {
-                    int dx = GAME_AREA_X + 100;
-                    int dy = GAME_AREA_Y + 150;
-                    int dw = GAME_AREA_WIDTH - 200;
+                    int dx = BASE_GAME_AREA_X + 100;
+                    int dy = BASE_GAME_AREA_Y + 150;
+                    int dw = BASE_GAME_AREA_WIDTH - 200;
                     int dh = gm->dev_mode ? 320 : 280;
                     int btn_w = 130;
                     int btn_h = 40;
@@ -1609,18 +1834,18 @@ static void x11_process(GameManager* gm, int* running) {
                     int restart_x = dx + (dw/2) - btn_w - 15;
                     int close_x = dx + (dw/2) + 15;
                     
-                    if (e.xmotion.x >= restart_x && e.xmotion.x < restart_x + btn_w &&
-                        e.xmotion.y >= btn_y && e.xmotion.y < btn_y + btn_h) {
+                    if (base_x >= restart_x && base_x < restart_x + btn_w &&
+                        base_y >= btn_y && base_y < btn_y + btn_h) {
                         game->error_dialog_button = 0;
-                    } else if (e.xmotion.x >= close_x && e.xmotion.x < close_x + btn_w &&
-                               e.xmotion.y >= btn_y && e.xmotion.y < btn_y + btn_h) {
+                    } else if (base_x >= close_x && base_x < close_x + btn_w &&
+                               base_y >= btn_y && base_y < btn_y + btn_h) {
                         game->error_dialog_button = 1;
                     } else if (gm->dev_mode) {
                         int copy_y = btn_y + btn_h + 10;
                         int copy_x = dx + (dw/2) - btn_w/2;
                         
-                        if (e.xmotion.x >= copy_x && e.xmotion.x < copy_x + btn_w &&
-                            e.xmotion.y >= copy_y && e.xmotion.y < copy_y + btn_h - 5) {
+                        if (base_x >= copy_x && base_x < copy_x + btn_w &&
+                            base_y >= copy_y && base_y < copy_y + btn_h - 5) {
                             game->error_dialog_button = 2;
                         } else {
                             game->error_dialog_button = -1;
@@ -1632,11 +1857,11 @@ static void x11_process(GameManager* gm, int* running) {
             }
             
             // Sidebar hover
-            if (e.xmotion.x < SIDEBAR_WIDTH) {
+            if (base_x < BASE_SIDEBAR_WIDTH) {
                 int by = gm->dev_mode ? 65 : 55;
                 for (int i = 0; i < gm->game_count; i++) {
-                    if (e.xmotion.y >= by && e.xmotion.y < by+35 
-                        && e.xmotion.x >= 10 && e.xmotion.x < SIDEBAR_WIDTH-32) {
+                    if (base_y >= by && base_y < by+35 
+                        && base_x >= 10 && base_x < BASE_SIDEBAR_WIDTH-32) {
                         gm->hover_button = i;
                         break;
                     }
@@ -1644,11 +1869,20 @@ static void x11_process(GameManager* gm, int* running) {
                 }
             }
         }
+        
+        // Handle mouse enter/leave for cursor visibility
+        if (e.type == EnterNotify) {
+            XDefineCursor(gm->display, gm->window, gm->cursor);
+        }
+        if (e.type == LeaveNotify) {
+            XUndefineCursor(gm->display, gm->window);
+        }
     }
 }
 
 static void x11_cleanup(GameManager* gm) {
     if (!gm) return;
+    if (gm->cursor) { XFreeCursor(gm->display, gm->cursor); gm->cursor = 0; }
     if (gm->ximage) { free(gm->ximage->data); gm->ximage->data = NULL; XDestroyImage(gm->ximage); gm->ximage = NULL; }
     if (gm->gc) { XFreeGC(gm->display, gm->gc); gm->gc = NULL; }
     if (gm->window) { XDestroyWindow(gm->display, gm->window); gm->window = 0; }
@@ -1656,7 +1890,7 @@ static void x11_cleanup(GameManager* gm) {
 }
 
 // =============================================================================
-// WEB SERVER
+// WEB SERVER (unchanged, serves base resolution)
 // =============================================================================
 
 typedef struct {
@@ -1709,7 +1943,7 @@ static void whandle(WebServer* w, int cf) {
     }
     else if (strncmp(p, "/f", 2) == 0) {
         pthread_mutex_lock(&w->gm->fb_mutex);
-        int sz = MAIN_WINDOW_WIDTH * MAIN_WINDOW_HEIGHT * 4;
+        int sz = BASE_WINDOW_WIDTH * BASE_WINDOW_HEIGHT * 4;
         char h[256];
         int hl = snprintf(h, sizeof(h),
             "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
@@ -1744,9 +1978,9 @@ static void whandle(WebServer* w, int cf) {
             if (w->gm->current_game >= 0 && w->gm->current_game < w->gm->game_count) {
                 GameProcess* game = w->gm->games[w->gm->current_game];
                 if (game && game->error_dialog && game->has_error) {
-                    int dx = GAME_AREA_X + 100;
-                    int dy = GAME_AREA_Y + 150;
-                    int dw = GAME_AREA_WIDTH - 200;
+                    int dx = BASE_GAME_AREA_X + 100;
+                    int dy = BASE_GAME_AREA_Y + 150;
+                    int dw = BASE_GAME_AREA_WIDTH - 200;
                     int dh = w->gm->dev_mode ? 320 : 280;
                     int btn_w = 130;
                     int btn_h = 40;
@@ -1776,10 +2010,10 @@ static void whandle(WebServer* w, int cf) {
                 }
             }
             
-            if (x < SIDEBAR_WIDTH) {
+            if (x < BASE_SIDEBAR_WIDTH) {
                 int by = w->gm->dev_mode ? 65 : 55;
                 for (int i = 0; i < w->gm->game_count; i++) {
-                    if (y >= by && y < by+35 && x >= 10 && x < SIDEBAR_WIDTH-32) {
+                    if (y >= by && y < by+35 && x >= 10 && x < BASE_SIDEBAR_WIDTH-32) {
                         w->gm->hover_button = i;
                         break;
                     }
