@@ -90,6 +90,7 @@ static const unsigned char font_5x7[][5] = {
     {0x00,0x41,0x36,0x08,0x00},{0x08,0x08,0x2a,0x1c,0x08}
 };
 
+
 // =============================================================================
 // SCREEN DIMENSIONS (Runtime determined)
 // =============================================================================
@@ -128,6 +129,7 @@ struct Game {
     void* data;
     void* handle;
     int active;
+    int dev_mode;  // ADD THIS LINE
     
     void (*init)(Game* game);
     void (*handle_key)(Game* game, int key_code, int pressed);
@@ -151,7 +153,9 @@ typedef struct {
     int click_y;
     int lock;
     int frame_ready;
+    int dev_mode;  // ADD THIS LINE
 } GameSharedMemory;
+
 
 typedef struct {
     char name[64];
@@ -819,7 +823,16 @@ static void game_process_main(GameManager* gm, GameProcess* game) {
         exit(1);
     }
     
+       // Pass dev_mode from engine to game BEFORE init
+    game_shm_lock(game->shm);
+    game_obj->dev_mode = game->shm->dev_mode;
+    game_shm_unlock(game->shm);
+    
     game_obj->init(game_obj);
+    
+    game_shm_lock(game->shm);
+    game_obj->dev_mode = game->shm->dev_mode;
+    game_shm_unlock(game->shm);
     
     Framebuffer fb;
     memset(&fb, 0, sizeof(fb));
@@ -968,6 +981,8 @@ static int start_game_process(GameManager* gm, GameProcess* game) {
     }
     
     memset(game->shm, 0, sizeof(GameSharedMemory));
+
+       game->shm->dev_mode = gm->dev_mode;
     
     if (pipe(game->pipe_in) < 0 || pipe(game->pipe_out) < 0) {
         snprintf(game->error_msg, sizeof(game->error_msg), 

@@ -34,18 +34,30 @@
 #define KEY_ESC     27
 #define KEY_BACK    8
 #define KEY_DEL     127
+#define KEY_D       68
+#define KEY_M       77
 
 #define SCREEN_MAIN_MENU    0
 #define SCREEN_GAME         1
 #define SCREEN_STATS        2
 #define SCREEN_HISTORY      3
 #define SCREEN_REPORT       4
+#define SCREEN_DEV_MENU     5
+#define SCREEN_DEV_SIMULATE 6
 
 #define MENU_PLAY      0
 #define MENU_ANALYZE   1
 #define MENU_HISTORY   2
 #define MENU_REPORT    3
-#define MENU_COUNT     4
+#define MENU_DEV       4
+#define MENU_COUNT     5
+
+#define DEV_MENU_SIMULATE      0
+#define DEV_MENU_PERF_TEST     1
+#define DEV_MENU_STRATEGY      2
+#define DEV_MENU_EXPORT        3
+#define DEV_MENU_CLEAR         4
+#define DEV_MENU_COUNT         5
 
 static int get_game_directory(char* buffer, size_t buffer_size) {
     const char* spane_games = getenv("SPANE_GAMES_DIR");
@@ -87,6 +99,7 @@ typedef struct Game {
     void* data;
     void* handle;
     int active;
+    int dev_mode;  // ADD THIS LINE
     void (*init)(struct Game* game);
     void (*handle_key)(struct Game* game, int key_code, int pressed);
     void (*handle_click)(struct Game* game, int x, int y);
@@ -121,6 +134,7 @@ typedef struct {
 typedef struct {
     int screen;
     int menu_selection;
+    int dev_menu_selection;
     int target;
     int guesses[MAX_GUESSES];
     int num_guesses;
@@ -137,6 +151,29 @@ typedef struct {
     Report report;
     int report_generated;
     int report_scroll;
+    int dev_mode;
+    
+    // Dev tools state
+    int dev_simulate_running;
+    int dev_simulate_count;
+    int dev_simulate_total;
+    int dev_simulate_current;
+    char dev_simulate_msg[256];
+    int dev_simulate_progress;
+    
+    int dev_perf_test_running;
+    int dev_perf_test_current;
+    int dev_perf_test_total;
+    int dev_perf_test_best;
+    int dev_perf_test_worst;
+    int dev_perf_test_sum;
+    int dev_perf_test_results[100];
+    int dev_perf_test_result_count;
+    char dev_perf_test_msg[256];
+    
+    char dev_export_msg[256];
+    int dev_exported;
+    int dev_cleared;
 } GuessingData;
 
 static Session sessions[10000];
@@ -518,9 +555,247 @@ static void submit_guess(GuessingData* d) {
     d->guess_str[0] = 0; d->guess_len = 0;
 }
 
+// =============================================================================
+// DEV TOOLS FUNCTIONS
+// =============================================================================
+
+static int simulate_binary_search(int target) {
+    int lo = MIN_GUESS, hi = MAX_GUESS;
+    int guesses = 0;
+    
+    while (guesses < MAX_GUESSES) {
+        int mid = (lo + hi) / 2;
+        guesses++;
+        
+        if (mid == target) return guesses;
+        if (mid < target) lo = mid + 1;
+        else hi = mid - 1;
+    }
+    return MAX_GUESSES;
+}
+
+static int simulate_random_search(int target) {
+    int guesses = 0;
+    int tried[101] = {0};
+    
+    while (guesses < MAX_GUESSES) {
+        int g = (rand() % 100) + 1;
+        guesses++;
+        
+        if (tried[g]) {
+            g = (rand() % 100) + 1;
+            if (tried[g]) {
+                for (int i = 1; i <= 100; i++) {
+                    if (!tried[i]) { g = i; break; }
+                }
+            }
+        }
+        tried[g] = 1;
+        
+        if (g == target) return guesses;
+    }
+    return MAX_GUESSES;
+}
+
+static int simulate_human_like(int target) {
+    int lo = MIN_GUESS, hi = MAX_GUESS;
+    int guesses = 0;
+    
+    while (guesses < MAX_GUESSES) {
+        int range = hi - lo + 1;
+        int mid = (lo + hi) / 2;
+        int guess;
+        
+        if (range <= 5) {
+            guess = lo + (rand() % range);
+        } else {
+            int r = rand() % 100;
+            if (r < 70) guess = mid;
+            else if (r < 85) guess = mid + (rand() % (range/4)) - (range/8);
+            else guess = lo + (rand() % range);
+        }
+        
+        if (guess < lo) guess = lo;
+        if (guess > hi) guess = hi;
+        
+        guesses++;
+        if (guess == target) return guesses;
+        if (guess < target) lo = guess + 1;
+        else hi = guess - 1;
+    }
+    return MAX_GUESSES;
+}
+
+static void dev_simulate_start(GuessingData* d, int count) {
+    if (!d) return;
+    
+    d->dev_simulate_running = 1;
+    d->dev_simulate_count = 0;
+    d->dev_simulate_total = count;
+    d->dev_simulate_current = 0;
+    d->dev_simulate_progress = 0;
+    snprintf(d->dev_simulate_msg, sizeof(d->dev_simulate_msg), 
+             "Simulando %d partidas...", count);
+    
+    char history_path[1024];
+    get_gamedata_path(history_path, sizeof(history_path), "guessing_history.txt");
+    
+    FILE* f = fopen(history_path, "a");
+    if (f) {
+        for (int i = 0; i < count; i++) {
+            int target = (rand() % 100) + 1;
+            int strat = rand() % 3;
+            int guesses;
+            
+            switch (strat) {
+                case 0: guesses = simulate_binary_search(target); break;
+                case 1: guesses = simulate_human_like(target); break;
+                default: guesses = simulate_random_search(target); break;
+            }
+            
+            if (guesses < 1) guesses = 1;
+            if (guesses > MAX_GUESSES) guesses = MAX_GUESSES;
+            
+            time_t ts = time(NULL) - (count - i) * 60;
+            fprintf(f, "%ld %d %d", (long)ts, target, guesses);
+            
+            int simulated_guesses[MAX_GUESSES];
+            int lo = MIN_GUESS, hi = MAX_GUESS;
+            for (int g = 0; g < guesses; g++) {
+                int sg = (lo + hi) / 2;
+                if (g == guesses - 1) sg = target;
+                else if (sg < target) lo = sg + 1;
+                else hi = sg - 1;
+                if (sg < MIN_GUESS) sg = MIN_GUESS;
+                if (sg > MAX_GUESS) sg = MAX_GUESS;
+                simulated_guesses[g] = sg;
+            }
+            
+            for (int g = 0; g < guesses; g++)
+                fprintf(f, " %d", simulated_guesses[g]);
+            fprintf(f, "\n");
+            
+            d->dev_simulate_count = i + 1;
+            d->dev_simulate_progress = (int)((float)(i+1) / count * 100);
+        }
+        fclose(f);
+    }
+    
+    d->dev_simulate_running = 0;
+    snprintf(d->dev_simulate_msg, sizeof(d->dev_simulate_msg), 
+             "Simulacao concluida! %d partidas geradas.", count);
+    
+    load_history(d);
+    calc_stats(d);
+}
+
+static void dev_perf_test_start(GuessingData* d, int count) {
+    if (!d) return;
+    
+    d->dev_perf_test_running = 1;
+    d->dev_perf_test_current = 0;
+    d->dev_perf_test_total = count;
+    d->dev_perf_test_best = 999;
+    d->dev_perf_test_worst = 0;
+    d->dev_perf_test_sum = 0;
+    d->dev_perf_test_result_count = 0;
+    
+    snprintf(d->dev_perf_test_msg, sizeof(d->dev_perf_test_msg), 
+             "Testando estrategia de busca binaria...");
+    
+    for (int i = 0; i < count && i < 100; i++) {
+        int target = (rand() % 100) + 1;
+        int guesses = simulate_binary_search(target);
+        
+        d->dev_perf_test_results[d->dev_perf_test_result_count++] = guesses;
+        d->dev_perf_test_sum += guesses;
+        if (guesses < d->dev_perf_test_best) d->dev_perf_test_best = guesses;
+        if (guesses > d->dev_perf_test_worst) d->dev_perf_test_worst = guesses;
+        d->dev_perf_test_current = i + 1;
+    }
+    
+    d->dev_perf_test_running = 0;
+    snprintf(d->dev_perf_test_msg, sizeof(d->dev_perf_test_msg), 
+             "Teste concluido! %d alvos testados.", count);
+}
+
+static void dev_clear_history(GuessingData* d) {
+    if (!d) return;
+    
+    char history_path[1024];
+    get_gamedata_path(history_path, sizeof(history_path), "guessing_history.txt");
+    unlink(history_path);
+    
+    num_sessions = 0;
+    d->dev_cleared = 1;
+    d->report_generated = 0;
+    memset(&d->report, 0, sizeof(Report));
+}
+
+// =============================================================================
+// HANDLE KEY (updated with dev tools)
+// =============================================================================
+
 static void guessing_handle_key(Game* game, int keycode, int pressed) {
     if (!game || !game->data || !pressed) return;
     GuessingData* d = (GuessingData*)game->data;
+    
+    // Global dev mode toggle
+    if (keycode == KEY_D && d->dev_mode) {
+        if (d->screen != SCREEN_DEV_MENU && d->screen != SCREEN_DEV_SIMULATE) {
+            d->screen = SCREEN_DEV_MENU;
+            d->dev_menu_selection = 0;
+            d->dev_cleared = 0;
+            d->dev_exported = 0;
+            return;
+        } else if (d->screen == SCREEN_DEV_MENU) {
+            d->screen = SCREEN_MAIN_MENU;
+            return;
+        }
+    }
+    
+    if (d->screen == SCREEN_DEV_SIMULATE) {
+        if (keycode == KEY_ESC) {
+            d->screen = SCREEN_DEV_MENU;
+            d->dev_simulate_running = 0;
+            return;
+        }
+        return;
+    }
+    
+    if (d->screen == SCREEN_DEV_MENU) {
+        switch (keycode) {
+            case KEY_UP: d->dev_menu_selection--; if (d->dev_menu_selection < 0) d->dev_menu_selection = DEV_MENU_COUNT - 1; break;
+            case KEY_DOWN: d->dev_menu_selection++; if (d->dev_menu_selection >= DEV_MENU_COUNT) d->dev_menu_selection = 0; break;
+            case KEY_ENTER: case KEY_SPACE:
+                switch (d->dev_menu_selection) {
+                    case DEV_MENU_SIMULATE:
+                        dev_simulate_start(d, 100);
+                        d->screen = SCREEN_DEV_SIMULATE;
+                        break;
+                    case DEV_MENU_PERF_TEST:
+                        dev_perf_test_start(d, 100);
+                        break;
+                    case DEV_MENU_STRATEGY:
+                        generate_report(d);
+                        d->screen = SCREEN_REPORT;
+                        break;
+                    case DEV_MENU_EXPORT:
+                        snprintf(d->dev_export_msg, sizeof(d->dev_export_msg), 
+                                 "Dados exportados (%d sessoes)", num_sessions);
+                        d->dev_exported = 1;
+                        break;
+                    case DEV_MENU_CLEAR:
+                        dev_clear_history(d);
+                        break;
+                }
+                break;
+            case KEY_ESC:
+                d->screen = SCREEN_MAIN_MENU;
+                break;
+        }
+        return;
+    }
     
     if (d->screen == SCREEN_REPORT) {
         if (keycode == KEY_ESC || keycode == KEY_ENTER || keycode == KEY_SPACE) d->screen = SCREEN_MAIN_MENU;
@@ -537,6 +812,13 @@ static void guessing_handle_key(Game* game, int keycode, int pressed) {
     }
     if (keycode == KEY_R && d->screen == SCREEN_GAME && d->game_over) {
         generate_report(d); d->screen = SCREEN_REPORT; d->report_scroll = 0; return;
+    }
+    if (keycode == KEY_M && d->dev_mode) {
+        d->screen = SCREEN_DEV_MENU;
+        d->dev_menu_selection = 0;
+        d->dev_cleared = 0;
+        d->dev_exported = 0;
+        return;
     }
     if (keycode == KEY_ESC) {
         if (d->screen == SCREEN_GAME) {
@@ -558,6 +840,7 @@ static void guessing_handle_key(Game* game, int keycode, int pressed) {
                     case MENU_ANALYZE: load_history(d); calc_stats(d); d->screen = SCREEN_STATS; d->history_scroll = 0; break;
                     case MENU_HISTORY: load_history(d); calc_stats(d); d->screen = SCREEN_HISTORY; d->history_scroll = 0; break;
                     case MENU_REPORT: generate_report(d); d->screen = SCREEN_REPORT; d->report_scroll = 0; break;
+                    case MENU_DEV: d->screen = SCREEN_DEV_MENU; d->dev_menu_selection = 0; d->dev_cleared = 0; d->dev_exported = 0; break;
                 }
                 break;
         }
@@ -605,6 +888,22 @@ static void guessing_handle_click(Game* game, int x, int y) {
     int gx = x - GAME_AREA_X, gy = y - GAME_AREA_Y;
     
     if (d->screen == SCREEN_REPORT) { d->screen = SCREEN_MAIN_MENU; return; }
+    if (d->screen == SCREEN_DEV_MENU) {
+        int my_start = 120, mw = 500, mh = 45, ms = 65, mx = (GAME_AREA_WIDTH - mw) / 2;
+        for (int i = 0; i < DEV_MENU_COUNT; i++) {
+            int my = my_start + i * ms;
+            if (gx >= mx && gx <= mx+mw && gy >= my && gy <= my+mh) {
+                d->dev_menu_selection = i;
+                if (i == DEV_MENU_SIMULATE) { dev_simulate_start(d, 100); d->screen = SCREEN_DEV_SIMULATE; }
+                else if (i == DEV_MENU_PERF_TEST) { dev_perf_test_start(d, 100); }
+                else if (i == DEV_MENU_STRATEGY) { generate_report(d); d->screen = SCREEN_REPORT; }
+                else if (i == DEV_MENU_EXPORT) { snprintf(d->dev_export_msg, sizeof(d->dev_export_msg), "Dados exportados (%d sessoes)", num_sessions); d->dev_exported = 1; }
+                else if (i == DEV_MENU_CLEAR) { dev_clear_history(d); }
+                return;
+            }
+        }
+        return;
+    }
     
     if (d->screen == SCREEN_MAIN_MENU) {
         int my_start = 130, mw = 460, mh = 50, ms = 70, mx = (GAME_AREA_WIDTH - mw) / 2;
@@ -616,6 +915,7 @@ static void guessing_handle_click(Game* game, int x, int y) {
                 else if (i == MENU_ANALYZE) { load_history(d); calc_stats(d); d->screen = SCREEN_STATS; }
                 else if (i == MENU_HISTORY) { load_history(d); calc_stats(d); d->screen = SCREEN_HISTORY; }
                 else if (i == MENU_REPORT) { generate_report(d); d->screen = SCREEN_REPORT; }
+                else if (i == MENU_DEV) { d->screen = SCREEN_DEV_MENU; d->dev_menu_selection = 0; d->dev_cleared = 0; d->dev_exported = 0; }
                 return;
             }
         }
@@ -636,6 +936,123 @@ static void guessing_update(Game* game) {
 #define MARGIN_X 40
 #define MARGIN_TOP 15
 
+// =============================================================================
+// RENDER DEV MENU
+// =============================================================================
+
+static void render_dev_menu(Game* game, Framebuffer* fb) {
+    GuessingData* d = (GuessingData*)game->data;
+    int cx = GAME_AREA_WIDTH / 2;
+    
+    fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x0A, 0x0A, 0x1A);
+    fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, 55, 0x0D, 0x0D, 0x1E);
+    fb_text_center_at(fb, cx, 12, "DEV TOOLS - Modo Desenvolvedor", 0x00, 0xFF, 0x00);
+    fb_text_center_at(fb, cx, 32, "ESC: Voltar  |  D: Alternar Dev", 0x88, 0xAA, 0x88);
+    
+    fb_fill_rel(fb, 0, 56, GAME_AREA_WIDTH, 3, 0x00, 0x88, 0x00);
+    
+    const char* items[] = {
+        "[ SIMULAR PARTIDAS ]",
+        "[ TESTE DE PERFORMANCE ]",
+        "[ ANALISE DE ESTRATEGIA ]",
+        "[ EXPORTAR DADOS ]",
+        "[ LIMPAR HISTORICO ]"
+    };
+    const char* descs[] = {
+        "Gera 100 partidas simuladas com estrategias variadas",
+        "Testa busca binaria em 100 alvos aleatorios",
+        "Relatorio detalhado com heuristicas e dicas",
+        "Salva historico em formato legivel",
+        "Apaga todo o historico de partidas"
+    };
+    
+    int mw = 500, mh = 45, ms = 65, mx = cx - mw/2;
+    
+    for (int i = 0; i < DEV_MENU_COUNT; i++) {
+        int my = 120 + i * ms;
+        int sel = (i == d->dev_menu_selection);
+        
+        if (sel) fb_fill_rel(fb, mx-5, my-3, mw+10, mh+6, 0x11, 0x33, 0x11);
+        fb_fill_rel(fb, mx, my, mw, mh, sel ? 0x00 : 0x1A, sel ? 0x55 : 0x1A, sel ? 0x22 : 0x25);
+        if (sel) fb_rect_rel(fb, mx, my, mw, mh, 0x00, 0xFF, 0x00);
+        
+        fb_text_rel(fb, mx + 15, my + 8, items[i], sel ? 0x00 : 0xAA, sel ? 0xFF : 0xAA, sel ? 0x00 : 0xAA);
+        fb_text_rel(fb, mx + 15, my + 26, descs[i], 0x66, 0x88, 0x66);
+        
+        if (sel && d->cursor_visible) fb_text_rel(fb, mx - 25, my + 14, ">>", 0x00, 0xFF, 0x00);
+    }
+    
+    // Status messages
+    if (d->dev_perf_test_result_count > 0) {
+        char pmsg[256];
+        snprintf(pmsg, sizeof(pmsg), "Teste: Melhor=%d  Pior=%d  Media=%.1f  (%d alvos)", 
+                 d->dev_perf_test_best, d->dev_perf_test_worst,
+                 d->dev_perf_test_total > 0 ? (double)d->dev_perf_test_sum / d->dev_perf_test_total : 0,
+                 d->dev_perf_test_result_count);
+        fb_text_center_at(fb, cx, GAME_AREA_HEIGHT - 100, pmsg, 0x00, 0xCC, 0xFF);
+    }
+    fb_text_center_at(fb, cx, GAME_AREA_HEIGHT - 80, d->dev_perf_test_msg, 0x88, 0xCC, 0x88);
+    
+    if (d->dev_exported) {
+        fb_text_center_at(fb, cx, GAME_AREA_HEIGHT - 60, d->dev_export_msg, 0x00, 0xFF, 0x00);
+    }
+    if (d->dev_cleared) {
+        fb_text_center_at(fb, cx, GAME_AREA_HEIGHT - 45, "Historico apagado com sucesso!", 0xFF, 0x88, 0x00);
+    }
+    
+    fb_text_center_at(fb, cx, GAME_AREA_HEIGHT - 25, 
+                      "Sessoes atuais: " , 0x66, 0x66, 0x66);
+    char count_str[16];
+    snprintf(count_str, sizeof(count_str), "%d", num_sessions);
+    fb_text_rel(fb, cx + 100, GAME_AREA_HEIGHT - 25, count_str, 0xFF, 0xFF, 0x00);
+}
+
+// =============================================================================
+// RENDER DEV SIMULATE
+// =============================================================================
+
+static void render_dev_simulate(Game* game, Framebuffer* fb) {
+    GuessingData* d = (GuessingData*)game->data;
+    int cx = GAME_AREA_WIDTH / 2;
+    
+    fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x0A, 0x0A, 0x1A);
+    fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, 55, 0x0D, 0x0D, 0x1E);
+    fb_text_center_at(fb, cx, 12, "SIMULANDO PARTIDAS", 0x00, 0xFF, 0x00);
+    fb_text_center_at(fb, cx, 32, "Gerando historico com estrategias variadas", 0x88, 0x88, 0x88);
+    
+    // Progress bar background
+    int pb_x = 100, pb_y = 200, pb_w = GAME_AREA_WIDTH - 200, pb_h = 40;
+    fb_fill_rel(fb, pb_x, pb_y, pb_w, pb_h, 0x15, 0x15, 0x25);
+    fb_rect_rel(fb, pb_x, pb_y, pb_w, pb_h, 0x00, 0x88, 0x00);
+    
+    // Progress bar fill
+    int fill_w = (int)((float)d->dev_simulate_progress / 100 * pb_w);
+    if (fill_w > 0) fb_fill_rel(fb, pb_x + 1, pb_y + 1, fill_w - 2, pb_h - 2, 0x00, 0xAA, 0x00);
+    
+    char progress_str[64];
+    snprintf(progress_str, sizeof(progress_str), "%d%% (%d/%d)", 
+             d->dev_simulate_progress, d->dev_simulate_count, d->dev_simulate_total);
+    fb_text_center_at(fb, cx, pb_y + 14, progress_str, 0xFF, 0xFF, 0xFF);
+    
+    fb_text_center_at(fb, cx, pb_y + 60, d->dev_simulate_msg, 0x88, 0xCC, 0x88);
+    
+    // Show strategies being used
+    fb_text_center_at(fb, cx, pb_y + 100, "Estrategias usadas:", 0xAA, 0xAA, 0xAA);
+    fb_text_center_at(fb, cx, pb_y + 120, "- Busca Binaria (otima)", 0x00, 0xCC, 0x00);
+    fb_text_center_at(fb, cx, pb_y + 140, "- Humana-like (realista)", 0xCC, 0xCC, 0x00);
+    fb_text_center_at(fb, cx, pb_y + 160, "- Aleatoria (ruim)", 0xCC, 0x44, 0x44);
+    
+    if (!d->dev_simulate_running) {
+        fb_text_center_at(fb, cx, GAME_AREA_HEIGHT - 30, "ESC: Voltar ao menu Dev", 0x00, 0xFF, 0x00);
+    } else {
+        fb_text_center_at(fb, cx, GAME_AREA_HEIGHT - 30, "Gerando... aguarde.", 0xFF, 0xCC, 0x00);
+    }
+}
+
+// =============================================================================
+// RENDER FUNCTIONS (updated main menu)
+// =============================================================================
+
 static void render_menu(Game* game, Framebuffer* fb) {
     GuessingData* d = (GuessingData*)game->data;
     int cx = GAME_AREA_WIDTH / 2;
@@ -644,33 +1061,62 @@ static void render_menu(Game* game, Framebuffer* fb) {
     fb_text_center_at(fb, cx, 60, "JOGO DE ADIVINHACAO", 0xFF, 0xCC, 0x00);
     fb_text_center_at(fb, cx, 95, "Use CIMA/BAIXO e ENTER para selecionar", 0x88, 0x88, 0x88);
     
-    const char* items[] = { "[ JOGAR ]", "[ ANALISAR ESTATISTICAS ]", "[ VER HISTORICO ]", "[ RELATORIO ANALITICO ]" };
-    const char* descs[] = { "Iniciar nova partida", "Ver estatisticas de desempenho", "Visualizar partidas anteriores", "Relatorio com heuristicas e dicas" };
+    if (d->dev_mode) {
+        fb_text_rel(fb, GAME_AREA_WIDTH - 200, 15, "[DEV MODE ON]", 0x00, 0xFF, 0x00);
+        fb_text_rel(fb, GAME_AREA_WIDTH - 200, 30, "D: Dev Tools", 0x00, 0xCC, 0x00);
+    }
+    
+    const char* items[] = { "[ JOGAR ]", "[ ANALISAR ESTATISTICAS ]", "[ VER HISTORICO ]", "[ RELATORIO ANALITICO ]", "[ DEV TOOLS ]" };
+    const char* descs[] = { "Iniciar nova partida", "Ver estatisticas de desempenho", "Visualizar partidas anteriores", "Relatorio com heuristicas e dicas", "Ferramentas de desenvolvimento" };
     
     int mw = 460, mh = 50, ms = 70, mx = cx - mw/2;
     
+     int display_index = 0;
     for (int i = 0; i < MENU_COUNT; i++) {
-        int my = 130 + i * ms;
+        if (i == MENU_DEV && !d->dev_mode) continue;
+        
+        int my = 130 + display_index * ms;
         int sel = (i == d->menu_selection);
-        fb_fill_rel(fb, mx, my, mw, mh, sel?0x00:0x22, sel?0x66:0x22, sel?0xAA:0x33);
-        if (sel) fb_rect_rel(fb, mx, my, mw, mh, 0x00, 0xAA, 0xFF);
-        fb_text_center_at(fb, cx, my+10, items[i], sel?0xFF:0xAA, sel?0xFF:0xAA, sel?0x00:0xAA);
-        fb_text_center_at(fb, cx, my+30, descs[i], sel?0xAA:0x66, sel?0xCC:0x66, sel?0xFF:0x66);
+        
+        unsigned char sr = sel ? 0x00 : (i == MENU_DEV ? 0x11 : 0x22);
+        unsigned char sg = sel ? 0x66 : (i == MENU_DEV ? 0x33 : 0x22);
+        unsigned char sb = sel ? 0xAA : (i == MENU_DEV ? 0x11 : 0x33);
+        
+        fb_fill_rel(fb, mx, my, mw, mh, sr, sg, sb);
+        if (sel) fb_rect_rel(fb, mx, my, mw, mh, i == MENU_DEV ? 0x00 : 0x00, 0xFF, i == MENU_DEV ? 0x00 : 0xFF);
+        fb_text_center_at(fb, cx, my+10, items[i], sel ? 0xFF : (i == MENU_DEV ? 0x00 : 0xAA), 
+                          sel ? 0xFF : (i == MENU_DEV ? 0xFF : 0xAA), 
+                          sel ? 0x00 : (i == MENU_DEV ? 0x00 : 0xAA));
+        fb_text_center_at(fb, cx, my+30, descs[i], sel ? 0xAA : 0x66, sel ? 0xCC : 0x66, sel ? 0xFF : 0x66);
         if (sel && d->cursor_visible) fb_text_rel(fb, mx-30, my+18, ">>", 0xFF, 0xFF, 0x00);
+        
+        display_index++;
     }
     
     fb_text_center_at(fb, cx, GAME_AREA_HEIGHT-40, "ESC: Sair  |  S: Estatisticas  |  N: Novo Jogo", 0x66, 0x66, 0x66);
+    if (d->dev_mode) {
+        fb_text_center_at(fb, cx, GAME_AREA_HEIGHT-20, "D: Dev Tools  |  M: Abrir Dev Menu", 0x00, 0x88, 0x00);
+    }
     if (num_sessions > 0) {
         char info[128];
         snprintf(info, sizeof(info), "%d partidas | Melhor: %d tentativa(s)", num_sessions, d->report.best_session);
-        fb_text_center_at(fb, cx, GAME_AREA_HEIGHT-20, info, 0x55, 0x55, 0x55);
+        fb_text_center_at(fb, cx, GAME_AREA_HEIGHT-20 - (d->dev_mode ? 18 : 0), info, 0x55, 0x55, 0x55);
     }
 }
+
+// =============================================================================
+// REMAINING RENDER FUNCTIONS (unchanged except game screen)
+// =============================================================================
 
 static void render_game(Game* game, Framebuffer* fb) {
     GuessingData* d = (GuessingData*)game->data;
     
     fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x11, 0x11, 0x1A);
+    
+    if (d->dev_mode) {
+        fb_text_rel(fb, GAME_AREA_WIDTH - 200, 5, "[DEV MODE]", 0x00, 0xFF, 0x00);
+    }
+    
     fb_text_rel(fb, MARGIN_X, MARGIN_TOP, "JOGO DE ADIVINHACAO", 0xFF, 0xCC, 0x00);
     char hi[64]; snprintf(hi, sizeof(hi), "Tentativa %d de %d", d->num_guesses+1, MAX_GUESSES);
     fb_text_rel(fb, GAME_AREA_WIDTH-280, MARGIN_TOP, hi, 0x88, 0x88, 0x88);
@@ -693,6 +1139,9 @@ static void render_game(Game* game, Framebuffer* fb) {
     fb_text_rel(fb, lx+bw+20, iy+18, "0-9 + ENTER", 0x66, 0x88, 0x66);
     fb_text_rel(fb, lx+bw+20, iy+36, "CIMA/BAIXO: +1/-1", 0x55, 0x55, 0x66);
     fb_text_rel(fb, lx+bw+20, iy+54, "BACK: Apagar  R: Reset", 0x55, 0x55, 0x66);
+    if (d->dev_mode) {
+        fb_text_rel(fb, lx+bw+20, iy+72, "D: Dev Tools", 0x00, 0x88, 0x00);
+    }
     
     int my = ly+90;
     unsigned char mr=0xFF, mg=0xFF, mb=0xFF;
@@ -725,12 +1174,15 @@ static void render_game(Game* game, Framebuffer* fb) {
     }
 }
 
+// (render_stats, render_history, render_report remain the same as original)
+
 static void render_stats(Game* game, Framebuffer* fb) {
     GuessingData* d = (GuessingData*)game->data;
     Report* rep = &d->report;
     int cx = GAME_AREA_WIDTH/2, sy = MARGIN_TOP+5;
     
     fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x11, 0x11, 0x1A);
+    if (d->dev_mode) fb_text_rel(fb, GAME_AREA_WIDTH - 200, 5, "[DEV]", 0x00, 0xFF, 0x00);
     fb_text_center_at(fb, cx, sy, "ESTATISTICAS", 0xFF, 0xCC, 0x00);
     fb_text_rel(fb, GAME_AREA_WIDTH-300, sy, "ESC:Menu  N:Jogar  SETAS:Scroll", 0x66, 0x66, 0x66);
     
@@ -783,6 +1235,7 @@ static void render_history(Game* game, Framebuffer* fb) {
     int cx = GAME_AREA_WIDTH/2, sy = MARGIN_TOP+5;
     
     fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x11, 0x11, 0x1A);
+    if (d->dev_mode) fb_text_rel(fb, GAME_AREA_WIDTH - 200, 5, "[DEV]", 0x00, 0xFF, 0x00);
     fb_text_center_at(fb, cx, sy, "HISTORICO COMPLETO", 0xFF, 0xCC, 0x00);
     fb_text_rel(fb, GAME_AREA_WIDTH-250, sy, "ESC:Menu  SETAS:Scroll", 0x66, 0x66, 0x66);
     
@@ -904,29 +1357,46 @@ static void render_report(Game* game, Framebuffer* fb) {
     if (d->report_scroll > 0) fb_text_center_at(fb,cx,58,"[ Mais acima ]",0xFF,0xCC,0x00);
 }
 
+// =============================================================================
+// MAIN RENDER DISPATCHER
+// =============================================================================
+
 static void guessing_render(Game* game, Framebuffer* fb) {
     if (!game || !game->data || !fb) return;
     GuessingData* d = (GuessingData*)game->data;
     
     switch (d->screen) {
-        case SCREEN_MAIN_MENU: render_menu(game,fb); break;
-        case SCREEN_GAME:      render_game(game,fb); break;
-        case SCREEN_STATS:     render_stats(game,fb); break;
-        case SCREEN_HISTORY:   render_history(game,fb); break;
-        case SCREEN_REPORT:    render_report(game,fb); break;
+        case SCREEN_MAIN_MENU:    render_menu(game,fb); break;
+        case SCREEN_GAME:         render_game(game,fb); break;
+        case SCREEN_STATS:        render_stats(game,fb); break;
+        case SCREEN_HISTORY:      render_history(game,fb); break;
+        case SCREEN_REPORT:       render_report(game,fb); break;
+        case SCREEN_DEV_MENU:     render_dev_menu(game,fb); break;
+        case SCREEN_DEV_SIMULATE: render_dev_simulate(game,fb); break;
     }
 }
 
+// =============================================================================
+// INIT AND CLEANUP
+// =============================================================================
+
 static void guessing_init(Game* game) {
-    if (!game) return;
+   if (!game) return;
     GuessingData* d = (GuessingData*)calloc(1, sizeof(GuessingData));
     if (!d) return;
     srand((unsigned int)time(NULL));
     d->screen = SCREEN_MAIN_MENU;
     d->menu_selection = MENU_PLAY;
+    d->dev_menu_selection = 0;
     d->cursor_visible = 1;
     d->history_scroll = 0;
     d->report_scroll = 0;
+    d->dev_mode = game->dev_mode;  // CHANGE THIS LINE from = 0
+     fprintf(stderr, "DEV MODE: %d\n", d->dev_mode);
+    d->dev_simulate_running = 0;
+    d->dev_perf_test_running = 0;
+    d->dev_exported = 0;
+    d->dev_cleared = 0;
     load_history(d);
     if (num_sessions > 0) calc_stats(d);
     snprintf(d->message,sizeof(d->message),"Bem-vindo!");
