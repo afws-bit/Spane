@@ -1,17 +1,11 @@
-// =============================================================================
-// GUESSING GAME - SPANE Engine SDK (VERSÃO FINAL CORRIGIDA)
-// =============================================================================
-// Compile: gcc -shared -fPIC -O3 -o jogodeadivinhacao.so jogodeadivinhacao.c
-// =============================================================================
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
-// =============================================================================
-// SDK Constants
-// =============================================================================
 #define MAIN_WINDOW_WIDTH  1000
 #define MAIN_WINDOW_HEIGHT 700
 #define GAME_AREA_WIDTH    800
@@ -19,16 +13,15 @@
 #define GAME_AREA_X        180
 #define GAME_AREA_Y        50
 
-// =============================================================================
-// Game Constants
-// =============================================================================
 #define MIN_GUESS 1
 #define MAX_GUESS 100
 #define MAX_GUESSES 20
-#define MAX_SCORES 100
-#define HISTORY_FILE "gamedata/guessing_history.txt"
+#define MAX_SCORES 10000
 
-// Keycodes do SPANE
+#ifndef SPANE_GAMES_DIR
+#define SPANE_GAMES_DIR "/usr/local/etc/Spane/games"
+#endif
+
 #define KEY_UP      38
 #define KEY_DOWN    40
 #define KEY_LEFT    37
@@ -42,23 +35,48 @@
 #define KEY_BACK    8
 #define KEY_DEL     127
 
-// Telas
 #define SCREEN_MAIN_MENU    0
 #define SCREEN_GAME         1
 #define SCREEN_STATS        2
 #define SCREEN_HISTORY      3
 #define SCREEN_REPORT       4
 
-// Menu
 #define MENU_PLAY      0
 #define MENU_ANALYZE   1
 #define MENU_HISTORY   2
 #define MENU_REPORT    3
 #define MENU_COUNT     4
 
-// =============================================================================
-// Tipos
-// =============================================================================
+static int get_game_directory(char* buffer, size_t buffer_size) {
+    const char* spane_games = getenv("SPANE_GAMES_DIR");
+    if (spane_games) {
+        snprintf(buffer, buffer_size, "%s", spane_games);
+        return 0;
+    }
+    
+    const char* spane_home = getenv("SPANE_HOME");
+    if (spane_home) {
+        snprintf(buffer, buffer_size, "%s/games", spane_home);
+        return 0;
+    }
+    
+    snprintf(buffer, buffer_size, "%s", SPANE_GAMES_DIR);
+    return 0;
+}
+
+static int get_gamedata_path(char* buffer, size_t buffer_size, const char* filename) {
+    char game_dir[1024];
+    get_game_directory(game_dir, sizeof(game_dir));
+    
+    char gamedata_dir[1024];
+    snprintf(gamedata_dir, sizeof(gamedata_dir), "%s/gamedata", game_dir);
+    
+    mkdir(gamedata_dir, 0755);
+    
+    snprintf(buffer, buffer_size, "%s/%s", gamedata_dir, filename);
+    return 0;
+}
+
 typedef struct Framebuffer {
     unsigned char pixels[MAIN_WINDOW_WIDTH * MAIN_WINDOW_HEIGHT * 4];
 } Framebuffer;
@@ -103,36 +121,27 @@ typedef struct {
 typedef struct {
     int screen;
     int menu_selection;
-    
     int target;
     int guesses[MAX_GUESSES];
     int num_guesses;
     int game_over;
     int game_active;
-    
     char guess_str[8];
     int guess_len;
-    
     int cursor_visible;
     int frame_count;
-    
     char message[256];
     char hint_message[128];
     char status_message[128];
-    
-    // Scroll e relatório
     int history_scroll;
     Report report;
     int report_generated;
     int report_scroll;
 } GuessingData;
 
-static Session sessions[MAX_SCORES];
+static Session sessions[10000];
 static int num_sessions = 0;
 
-// =============================================================================
-// Fonte 5x7
-// =============================================================================
 static const unsigned char font_5x7[][5] = {
     {0x00,0x00,0x00,0x00,0x00},{0x00,0x00,0x5f,0x00,0x00},{0x00,0x07,0x00,0x07,0x00},
     {0x14,0x7f,0x14,0x7f,0x14},{0x24,0x2a,0x7f,0x2a,0x12},{0x23,0x13,0x08,0x64,0x62},
@@ -168,9 +177,6 @@ static const unsigned char font_5x7[][5] = {
     {0x00,0x41,0x36,0x08,0x00},{0x08,0x08,0x2a,0x1c,0x08}
 };
 
-// =============================================================================
-// Desenho
-// =============================================================================
 static inline int is_valid_game_coord(int x, int y) {
     return (x >= 0 && x < GAME_AREA_WIDTH && y >= 0 && y < GAME_AREA_HEIGHT);
 }
@@ -222,9 +228,6 @@ static void fb_text_center_at(Framebuffer* fb, int cx, int y, const char* s, uns
     fb_text_rel(fb, cx - (len*6)/2, y, s, r, g, b);
 }
 
-// =============================================================================
-// sqrt customizada
-// =============================================================================
 static double my_sqrt(double x) {
     if (x <= 0.0) return 0.0;
     double guess = x / 2.0;
@@ -236,9 +239,6 @@ static double my_sqrt(double x) {
     return guess;
 }
 
-// =============================================================================
-// FUNÇÕES RECURSIVAS
-// =============================================================================
 static int rec_sum(int* arr, int n) { 
     if (!arr || n <= 0) return 0;
     return arr[0] + rec_sum(arr + 1, n - 1); 
@@ -264,24 +264,15 @@ static double rec_sum_sq(int* arr, int n, double mean) {
     return d * d + rec_sum_sq(arr + 1, n - 1, mean);
 }
 
-// =============================================================================
-// Histórico e Arquivo
-// =============================================================================
-// =============================================================================
-// Histórico e Arquivo
-// =============================================================================
 static void save_session(GuessingData* d) {
     if (!d) return;
     
-    // Criar diretório gamedata/ se não existir
-    #ifdef _WIN32
-        system("if not exist gamedata mkdir gamedata");
-    #else
-        system("mkdir -p gamedata");
-    #endif
+    char history_path[1024];
+    get_gamedata_path(history_path, sizeof(history_path), "guessing_history.txt");
     
-    FILE* f = fopen("gamedata/guessing_history.txt", "a");
+    FILE* f = fopen(history_path, "a");
     if (!f) return;
+    
     time_t now = time(NULL);
     fprintf(f, "%ld %d %d", (long)now, d->target, d->num_guesses);
     for (int i = 0; i < d->num_guesses && i < MAX_GUESSES; i++)
@@ -294,11 +285,14 @@ static void load_history(GuessingData* d) {
     num_sessions = 0;
     if (d) d->history_scroll = 0;
     
-    FILE* f = fopen("gamedata/guessing_history.txt", "r");
+    char history_path[1024];
+    get_gamedata_path(history_path, sizeof(history_path), "guessing_history.txt");
+    
+    FILE* f = fopen(history_path, "r");
     if (!f) return;
     
     char line[2048];
-    while (fgets(line, sizeof(line), f) && num_sessions < MAX_SCORES) {
+    while (fgets(line, sizeof(line), f) && num_sessions < 10000) {
         Session* s = &sessions[num_sessions];
         memset(s, 0, sizeof(Session));
         
@@ -326,9 +320,6 @@ static void load_history(GuessingData* d) {
     fclose(f);
 }
 
-// =============================================================================
-// RELATÓRIO ANALÍTICO
-// =============================================================================
 static void generate_report(GuessingData* d) {
     Report* r = &d->report;
     memset(r, 0, sizeof(Report));
@@ -344,7 +335,7 @@ static void generate_report(GuessingData* d) {
         return;
     }
     
-    int gc[MAX_SCORES];
+    int gc[10000];
     int count = num_sessions;
     
     for (int i = 0; i < count; i++)
@@ -424,9 +415,6 @@ static const char* get_strategy(GuessingData* d) {
     return "Use busca binaria: comece em 50";
 }
 
-// =============================================================================
-// Dica progressiva
-// =============================================================================
 static void gen_hint(GuessingData* d) {
     if (!d) return;
     if (d->num_guesses == 0) {
@@ -453,9 +441,6 @@ static void gen_hint(GuessingData* d) {
         snprintf(d->hint_message, sizeof(d->hint_message), "O numero esta entre %d e %d", lo, hi);
 }
 
-// =============================================================================
-// Jogo
-// =============================================================================
 static void new_game(GuessingData* d) {
     if (!d) return;
     d->game_active = 1;
@@ -533,9 +518,6 @@ static void submit_guess(GuessingData* d) {
     d->guess_str[0] = 0; d->guess_len = 0;
 }
 
-// =============================================================================
-// Input Handler
-// =============================================================================
 static void guessing_handle_key(Game* game, int keycode, int pressed) {
     if (!game || !game->data || !pressed) return;
     GuessingData* d = (GuessingData*)game->data;
@@ -651,9 +633,6 @@ static void guessing_update(Game* game) {
     if (d->frame_count % 30 == 0) d->cursor_visible = !d->cursor_visible;
 }
 
-// =============================================================================
-// RENDER
-// =============================================================================
 #define MARGIN_X 40
 #define MARGIN_TOP 15
 
@@ -691,6 +670,7 @@ static void render_menu(Game* game, Framebuffer* fb) {
 static void render_game(Game* game, Framebuffer* fb) {
     GuessingData* d = (GuessingData*)game->data;
     
+    fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x11, 0x11, 0x1A);
     fb_text_rel(fb, MARGIN_X, MARGIN_TOP, "JOGO DE ADIVINHACAO", 0xFF, 0xCC, 0x00);
     char hi[64]; snprintf(hi, sizeof(hi), "Tentativa %d de %d", d->num_guesses+1, MAX_GUESSES);
     fb_text_rel(fb, GAME_AREA_WIDTH-280, MARGIN_TOP, hi, 0x88, 0x88, 0x88);
@@ -750,6 +730,7 @@ static void render_stats(Game* game, Framebuffer* fb) {
     Report* rep = &d->report;
     int cx = GAME_AREA_WIDTH/2, sy = MARGIN_TOP+5;
     
+    fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x11, 0x11, 0x1A);
     fb_text_center_at(fb, cx, sy, "ESTATISTICAS", 0xFF, 0xCC, 0x00);
     fb_text_rel(fb, GAME_AREA_WIDTH-300, sy, "ESC:Menu  N:Jogar  SETAS:Scroll", 0x66, 0x66, 0x66);
     
@@ -801,6 +782,7 @@ static void render_history(Game* game, Framebuffer* fb) {
     Report* rep = &d->report;
     int cx = GAME_AREA_WIDTH/2, sy = MARGIN_TOP+5;
     
+    fb_fill_rel(fb, 0, 0, GAME_AREA_WIDTH, GAME_AREA_HEIGHT, 0x11, 0x11, 0x1A);
     fb_text_center_at(fb, cx, sy, "HISTORICO COMPLETO", 0xFF, 0xCC, 0x00);
     fb_text_rel(fb, GAME_AREA_WIDTH-250, sy, "ESC:Menu  SETAS:Scroll", 0x66, 0x66, 0x66);
     
@@ -847,7 +829,6 @@ static void render_report(Game* game, Framebuffer* fb) {
     int y = 65 - scroll;
     char line[256];
     
-    // Seção 1: Estatísticas Agregadas
     if (y < 550 && y > -200) {
         fb_fill_rel(fb,20,y,760,155,0x11,0x11,0x22);
         fb_rect_rel(fb,20,y,760,155,0x33,0x55,0x77);
@@ -868,16 +849,14 @@ static void render_report(Game* game, Framebuffer* fb) {
     
     y += 170;
     
-    // Seção 2: Heurísticas (com dica com quebra de linha)
     if (y < 550 && y > -250) {
-        // Calcula quantas linhas a dica vai ocupar
         int tip_len = (int)strlen(r->improvement_tip);
-        int chars_per_line = 85;  // Caracteres por linha no painel
+        int chars_per_line = 85;
         int tip_lines = (tip_len + chars_per_line - 1) / chars_per_line;
         if (tip_lines < 1) tip_lines = 1;
-        if (tip_lines > 5) tip_lines = 5;  // Máximo 5 linhas
+        if (tip_lines > 5) tip_lines = 5;
         
-        int panel_h = 105 + tip_lines * 18;  // Altura dinâmica baseada na dica
+        int panel_h = 105 + tip_lines * 18;
         
         fb_fill_rel(fb,20,y,760,panel_h,0x11,0x11,0x22);
         fb_rect_rel(fb,20,y,760,panel_h,0x33,0x55,0x77);
@@ -894,7 +873,6 @@ static void render_report(Game* game, Framebuffer* fb) {
         
         fb_text_rel(fb,50,y+98,"Dica:",0xFF,0xCC,0x00);
         
-        // Quebra a dica em múltiplas linhas
         int dica_y = y + 98;
         int pos = 0;
         for (int i = 0; i < tip_lines && pos < tip_len; i++) {
@@ -902,7 +880,6 @@ static void render_report(Game* game, Framebuffer* fb) {
             int remaining = tip_len - pos;
             int copy_len = remaining < chars_per_line ? remaining : chars_per_line;
             
-            // Tenta quebrar em espaço
             if (copy_len == chars_per_line && pos + copy_len < tip_len) {
                 int break_pos = copy_len;
                 while (break_pos > chars_per_line/2 && r->improvement_tip[pos + break_pos] != ' ') {
@@ -916,7 +893,7 @@ static void render_report(Game* game, Framebuffer* fb) {
             
             fb_text_rel(fb, 100, dica_y + i * 18, tip_line, 0x88, 0xCC, 0x88);
             pos += copy_len;
-            while (pos < tip_len && r->improvement_tip[pos] == ' ') pos++;  // Pula espaços
+            while (pos < tip_len && r->improvement_tip[pos] == ' ') pos++;
         }
         
         y += panel_h + 15;
@@ -930,7 +907,7 @@ static void render_report(Game* game, Framebuffer* fb) {
 static void guessing_render(Game* game, Framebuffer* fb) {
     if (!game || !game->data || !fb) return;
     GuessingData* d = (GuessingData*)game->data;
-    fb_fill_rel(fb,0,0,GAME_AREA_WIDTH,GAME_AREA_HEIGHT,0x11,0x11,0x1A);
+    
     switch (d->screen) {
         case SCREEN_MAIN_MENU: render_menu(game,fb); break;
         case SCREEN_GAME:      render_game(game,fb); break;
