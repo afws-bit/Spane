@@ -14,7 +14,7 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 ## Principais Ferramentas ⚙️:
 
 - **draw.io**: utilizado para o diagrama.
-- [Notion](https://app.notion.com/p/373c226bd9dc80b5bf2cd36dda22cdff?v=373c226bd9dc8099821d000cc6935f3c&source=copy_link): ferramenta utilizada para o backlog e controle de tarefas.
+- [Notion](https://app.notion.com/p/373c226bd9dc80b5bf2cd36dda22cdff?v=373c226bd9dc8099821d000cc6935f3c): ferramenta utilizada para o backlog e controle de tarefas.
 - [Figma](https://www.figma.com/design/vX3Ak107LvhA7SHgESZi5J/SPANE?node-id=0-1&t=TX1BJ89Nwpzmp9ew-1): usado para simular o prototipo e a interface do programa
 - **Discord**: usado para reuniões e encontros 
 
