@@ -33,8 +33,7 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 
 ## 🤝 Relato de experiência em programação em pares
 "Durante o desenvolvimento do projeto, utilizamos a programação em pares para implementar funcionalidades e corrigir problemas. Enquanto um integrante escrevia o código, o outro acompanhava, revisava e sugeria melhorias em tempo real. Essa prática contribuiu para reduzir erros, aumentar a qualidade do código e promover a troca de conhecimentos entre a equipe. Além disso, a colaboração constante facilitou a tomada de decisões e tornou o processo de desenvolvimento mais eficiente."
-
-
+<img width="1284" height="699" alt="Captura de tela 2026-06-16 233257" src="https://github.com/user-attachments/assets/f45b99c8-bd8f-43a8-bd09-616516135eb1" />
 
 ## 👩‍💻 Equipe:
 - João Lucas Mendes Dos Santos: testes gerais, linear, back log
