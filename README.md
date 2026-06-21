@@ -32,7 +32,7 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 
 
 ## Bug Tracker
-Registro e acompanhamento de bugs, melhorias e novas funcionalidades do projeto Spane.
+**Registro e acompanhamento de bugs, melhorias e novas funcionalidades do projeto Spane.**
 <img width="1365" height="767" alt="Captura de tela 2026-06-21 010224" src="https://github.com/user-attachments/assets/507b59d7-7c45-4ca8-907b-25d6e7e1965a" />
 
 
