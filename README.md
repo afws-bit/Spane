@@ -34,7 +34,8 @@ https://github.com/user-attachments/assets/f48e596b-3bce-4c9b-9da5-b17c600464bf
 
 ## Bug Tracker
 **Registro e acompanhamento de bugs, melhorias e novas funcionalidades do projeto Spane.**
-<img width="1312" height="392" alt="image" src="https://github.com/user-attachments/assets/14be64c7-f681-4c3e-a8a0-ff38eb727f43" />
+<img width="1312" height="392" alt="Captura de tela 2026-06-21 161319" src="https://github.com/user-attachments/assets/c42afad6-18fc-4cff-a544-d8ed7dde36c2" />
+
 
 
 
