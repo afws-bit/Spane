@@ -37,11 +37,11 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 <img width="1284" height="699" alt="Captura de tela 2026-06-16 233257" src="https://github.com/user-attachments/assets/f45b99c8-bd8f-43a8-bd09-616516135eb1" />
 
 ## 👩‍💻 Equipe:
-- João Lucas Mendes Dos Santos: testes gerais, linear, back log
-- Augusto Freitas: figma, back end, linear
+- João Lucas Mendes Dos Santos: testes gerais, Notion, back log
+- Augusto Freitas: figma, back end, Notion
 - Daniel Luiz Massud: back end, front end, testes gerais, arquitetura
 - Fernando Antônio: parte criativa, suporte geral
 - Gustavo Cassemiro: back log, arquitetura
 - Glauberson: suporte geral, comunicação
-- Caio Catão: linear, figma, front end, back end
+- Caio Catão: Notion, figma, front end, back end
 
