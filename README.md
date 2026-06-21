@@ -2,7 +2,7 @@
 
 Lembra daquela sensação nostálgica de abrir um emulador para jogar os clássicos da sua infância? Agora, imagine canalizar toda essa energia e foco para o aprendizado. Um emulador de jogos educativos é a fusão perfeita entre o formato envolvente dos videogames e a absorção de conhecimento prático.
 
-A proposta não é criar apenas "jogguinhos de matemática sem graça", mas sim resgatar o espírito dos grandes clássicos, onde cada fase superada representa uma lição aprendida.
+A proposta não é criar apenas "joguinhos de matemática sem graça", mas sim resgatar o espírito dos grandes clássicos, onde cada fase superada representa uma lição aprendida.
 
 ㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤ<img width="768" height="513" alt="image" src="https://github.com/user-attachments/assets/d8a8e2b5-809b-4ede-a733-b7d5d8709ca8" />
 
