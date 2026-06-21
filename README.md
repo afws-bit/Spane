@@ -31,8 +31,6 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 ㅤ<img width="1365" height="767" alt="Captura de tela 2026-06-20 234953" src="https://github.com/user-attachments/assets/710b8dc5-f769-41eb-861d-cdd3122bc0b0" />
 
 
-<img width="1355" height="524" alt="image" src="https://github.com/user-attachments/assets/132e72b2-c945-4bb4-a032-22ca2158ba46" />
-
 ## Bug Tracker
 Registro e acompanhamento de bugs, melhorias e novas funcionalidades do projeto Spane.
 <img width="1365" height="767" alt="Captura de tela 2026-06-21 010224" src="https://github.com/user-attachments/assets/507b59d7-7c45-4ca8-907b-25d6e7e1965a" />
