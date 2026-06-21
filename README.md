@@ -7,10 +7,11 @@ A proposta não é criar apenas "joguinhos de matemática sem graça", mas sim r
 ㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤㅤ<img width="768" height="513" alt="image" src="https://github.com/user-attachments/assets/d8a8e2b5-809b-4ede-a733-b7d5d8709ca8" />
 
 
-## Logic Snake
-**Vídeo demonstrativo do Logic Snake, um dos jogos educativos desenvolvidos em nossa engine para ensino de lógica de programação.**
+## Screencast
+**Vídeo demonstrando o funcionamento da SPANE Engine e do jogo Logic Snake.**
 
-https://www.youtube.com/watch?v=yJwiTBg43fY
+
+https://github.com/user-attachments/assets/f48e596b-3bce-4c9b-9da5-b17c600464bf
 
 
 ## Principais Ferramentas ⚙️:
