@@ -8,7 +8,7 @@ A proposta não é criar apenas "joguinhos de matemática sem graça", mas sim r
 
 
 ## Screencast
-**Vídeo demonstrando a SPANE Engine e o Logic Snake, um dos jogos disponíveis na engine.**
+**Vídeo apresentando a navegação na SPANE Engine e a seleção de um de seus jogos, o Logic Snake.**
 
 
 https://github.com/user-attachments/assets/f48e596b-3bce-4c9b-9da5-b17c600464bf
