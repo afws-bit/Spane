@@ -22,7 +22,8 @@ https://github.com/user-attachments/assets/f48e596b-3bce-4c9b-9da5-b17c600464bf
 - **Discord**: usado para reuniões e encontros 
 
 
-**Tutorial de instalação do Spane ->**https://app.notion.com/p/Preparando-o-ambiente-363c226bd9dc80ea84c0db7329d90313?source=copy_link
+**Tutorial de instalação do Spane**:https://app.notion.com/p/Preparando-o-ambiente-363c226bd9dc80ea84c0db7329d90313?source=copy_link
+
 🔧 ```bash install.sh```
 
 🌎 ```spane```
