@@ -18,12 +18,11 @@ https://github.com/user-attachments/assets/f48e596b-3bce-4c9b-9da5-b17c600464bf
 
 - **draw.io**: utilizado para o diagrama.
 - [Notion](https://app.notion.com/p/373c226bd9dc80b5bf2cd36dda22cdff?v=373c226bd9dc8099821d000cc6935f3c): ferramenta utilizada para o backlog e controle de tarefas.
-Tutorial da instalação do Spane -> https://app.notion.com/p/Preparando-o-ambiente-363c226bd9dc80ea84c0db7329d90313?source=copy_link
 - [Figma](https://www.figma.com/design/vX3Ak107LvhA7SHgESZi5J/SPANE?node-id=0-1&t=TX1BJ89Nwpzmp9ew-1): usado para simular o prototipo e a interface do programa
 - **Discord**: usado para reuniões e encontros 
 
 
-
+**Tutorial de instalação do Spane ->**https://app.notion.com/p/Preparando-o-ambiente-363c226bd9dc80ea84c0db7329d90313?source=copy_link
 🔧 ```bash install.sh```
 
 🌎 ```spane```
