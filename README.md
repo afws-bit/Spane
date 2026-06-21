@@ -26,7 +26,7 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 
 
 ## Tela do quadro Kanban
-ㅤ<img width="1365" height="764" alt="Captura de tela 2026-06-20 234757" src="https://github.com/user-attachments/assets/b9d8a93d-9cac-4b62-a9f9-79c605fecbc2" />
+ㅤ<img width="1365" height="767" alt="Captura de tela 2026-06-20 234953" src="https://github.com/user-attachments/assets/710b8dc5-f769-41eb-861d-cdd3122bc0b0" />
 
 
 <img width="1355" height="524" alt="image" src="https://github.com/user-attachments/assets/132e72b2-c945-4bb4-a032-22ca2158ba46" />
