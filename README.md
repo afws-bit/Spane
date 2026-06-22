@@ -30,9 +30,9 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 
 **Execução**:
 
-spane          |    **Modo X11**
-spane --web    |    **Modo Web**
-spane --dev    |   **Modo Desenvolvedor**
+spane              # Modo X11
+spane --web        # Modo Web (http://localhost:3000)
+spane --dev        # Modo desenvolvedor
 
 ## Backlog
 <img width="1198" height="671" alt="Captura de tela 2026-06-22 150038" src="https://github.com/user-attachments/assets/688585ca-9b28-4e45-8788-2646f47e1345" />
