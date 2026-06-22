@@ -48,7 +48,10 @@ spane --dev        # Modo desenvolvedor
 ## Bug Tracker
 **Registro e acompanhamento de bugs, melhorias e novas funcionalidades do projeto Spane.**
 
-<img width="1267" height="313" alt="Captura de tela 2026-06-22 150924" src="https://github.com/user-attachments/assets/fa9d1411-1f5d-4341-bcda-5240b7c12d32" />
+<img width="1312" height="293" alt="Captura de tela 2026-06-22 192321" src="https://github.com/user-attachments/assets/58ae3ce6-938d-426b-92f6-5a71a1c53557" />
+<img width="1316" height="241" alt="Captura de tela 2026-06-22 192340" src="https://github.com/user-attachments/assets/08b625d4-9ffb-4059-8f99-5f005d2e0581" />
+
+
 
 
 **Mouse desaparecendo (Corrigido)**
@@ -78,6 +81,7 @@ A janela agora se ajusta automaticamente à resolução do navegador no modo web
 ## 🤝 Relato de experiência em programação em pares
 "Durante o desenvolvimento do projeto, utilizamos a programação em pares para implementar funcionalidades e corrigir problemas. Enquanto um integrante escrevia o código, o outro acompanhava, revisava e sugeria melhorias em tempo real. Essa prática contribuiu para reduzir erros, aumentar a qualidade do código e promover a troca de conhecimentos entre a equipe. Além disso, a colaboração constante facilitou a tomada de decisões e tornou o processo de desenvolvimento mais eficiente."
 <img width="1284" height="699" alt="Captura de tela 2026-06-16 233257" src="https://github.com/user-attachments/assets/f45b99c8-bd8f-43a8-bd09-616516135eb1" />
+Observação: Durante o desenvolvimento, a programação em pares foi utilizada com sucesso para a correção de bugs e melhorias gerais no engine. No entanto, não conseguimos aplicar a mesma prática na implementação das histórias de usuário. As principais barreiras foram a dificuldade em alinhar ideias criativas em tempo real e a pressão dos prazos, que tornou mais produtivo dividir as tarefas individualmente nessa etapa específica. Seguimos com revisões de código posteriores para manter a qualidade das entregas.
 
 ## 👩‍💻 Equipe:
 - João Lucas Mendes Dos Santos: testes gerais, Notion, back log.
