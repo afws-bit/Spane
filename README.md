@@ -36,7 +36,8 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 ## Bug Tracker
 **Registro e acompanhamento de bugs, melhorias e novas funcionalidades do projeto Spane.**
 
-<img width="1312" height="392" alt="Captura de tela 2026-06-21 161319" src="https://github.com/user-attachments/assets/c42afad6-18fc-4cff-a544-d8ed7dde36c2" />
+<img width="1397" height="423" alt="Captura de tela 2026-06-22 003432" src="https://github.com/user-attachments/assets/933621ad-46af-420c-ab69-7a8b768c6b4e" />
+
 
 **Mouse desaparecendo (Corrigido)**
 
