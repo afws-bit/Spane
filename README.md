@@ -51,7 +51,7 @@ O cursor do mouse sumia aleatoriamente durante o uso, especialmente ao alternar 
 
 **Durante**:
 A engine por um momento estava carregando direto na tela cheia, como dá para observar na imagem abaixo, mas o bug ainda persistia:
-https://ibb.co/gZGktSVh
+[url=https://ibb.co/gZGktSVh][img]https://i.ibb.co/1G3FRr6j/Captura-de-tela-2026-06-22-002534.png[/img][/url]
 
 
 **Depois**:
