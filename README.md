@@ -36,12 +36,27 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 ## Bug Tracker
 **Registro e acompanhamento de bugs, melhorias e novas funcionalidades do projeto Spane.**
 
+<img width="1312" height="392" alt="Captura de tela 2026-06-21 161319" src="https://github.com/user-attachments/assets/c42afad6-18fc-4cff-a544-d8ed7dde36c2" />
+
 **Mouse desaparecendo (Corrigido)**
 
 O cursor do mouse sumia aleatoriamente durante o uso, especialmente ao alternar entre a área do jogo e a barra lateral. O problema estava no rastreamento de hover dos botões do diálogo de erro, que sobrescrevia a visibilidade do cursor padrão do X11. A solução foi limitar o rastreamento de hover apenas para quando o mouse está sobre elementos interativos, restaurando o cursor padrão do sistema nas demais áreas.
 
 **Modo tela cheia adaptável (Corrigido)**
 
+**Antes**:
+
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/9e934fc0-c78a-469a-bb81-d0d1b0196d2d" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/09ad6ebb-a56f-4c33-a902-c2a15ebb78cf" />
+
+**Durante**:
+A engine por um momento estava carregando direto na tela cheia, como dá para observar na imagem abaixo, mas o bug ainda persistia:
+https://ibb.co/gZGktSVh
+
+
+**Depois**:
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/0b9841e4-db4a-4e09-b177-fb4bbd91f5e6" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/9eecbdc4-bf50-4ff6-8d96-beb491a841d4" />
 A janela agora se ajusta automaticamente à resolução do navegador no modo web e ao tamanho do monitor no modo X11. Anteriormente, o SPANE Engine usava um tamanho fixo de 1000 por 700 pixels que não se adaptava a telas maiores ou menores. A solução implementada detecta a resolução disponível no ambiente e redimensiona a área de renderização proporcionalmente, mantendo a qualidade visual em qualquer tamanho de tela.
 <img width="1312" height="392" alt="Captura de tela 2026-06-21 161319" src="https://github.com/user-attachments/assets/c42afad6-18fc-4cff-a544-d8ed7dde36c2" />
 
