@@ -16,7 +16,10 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 - **draw.io**: utilizado para o diagrama.
 - [Notion](https://app.notion.com/p/373c226bd9dc80b5bf2cd36dda22cdff?v=373c226bd9dc8099821d000cc6935f3c): ferramenta utilizada para o backlog e controle de tarefas.
 - [Figma](https://www.figma.com/design/vX3Ak107LvhA7SHgESZi5J/SPANE?node-id=0-1&t=TX1BJ89Nwpzmp9ew-1): usado para simular o prototipo e a interface do programa
-- **Discord**: usado para reuniões e encontros 
+- **Discord**: usado para reuniões e encontros.
+- **X11**: renderização nativa no Linux.
+- **Linguagem C**: desenvolvimento do engine e dos jogos.
+- **Git/Github**: versionamento de código.
 
 
 **Tutorial de instalação do Spane**:https://app.notion.com/p/Preparando-o-ambiente-363c226bd9dc80ea84c0db7329d90313?source=copy_link
@@ -24,6 +27,14 @@ https://www.youtube.com/watch?v=yJwiTBg43fY
 🔧 ```bash install.sh```
 
 🌎 ```spane```
+
+**Execução**:
+spane              **Modo X11**
+spane --web        **Modo Web**
+spane --dev        **Modo Desenvolvedor**
+
+## Backlog
+<img width="1198" height="671" alt="Captura de tela 2026-06-22 150038" src="https://github.com/user-attachments/assets/688585ca-9b28-4e45-8788-2646f47e1345" />
 
 
 ## Tela do quadro Kanban
