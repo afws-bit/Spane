@@ -58,9 +58,6 @@ https://ibb.co/gZGktSVh
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/0b9841e4-db4a-4e09-b177-fb4bbd91f5e6" />
 <img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/9eecbdc4-bf50-4ff6-8d96-beb491a841d4" />
 A janela agora se ajusta automaticamente à resolução do navegador no modo web e ao tamanho do monitor no modo X11. Anteriormente, o SPANE Engine usava um tamanho fixo de 1000 por 700 pixels que não se adaptava a telas maiores ou menores. A solução implementada detecta a resolução disponível no ambiente e redimensiona a área de renderização proporcionalmente, mantendo a qualidade visual em qualquer tamanho de tela.
-<img width="1312" height="392" alt="Captura de tela 2026-06-21 161319" src="https://github.com/user-attachments/assets/c42afad6-18fc-4cff-a544-d8ed7dde36c2" />
-
-
 
 
 
