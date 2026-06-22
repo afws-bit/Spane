@@ -48,7 +48,7 @@ spane --dev        # Modo desenvolvedor
 ## Bug Tracker
 **Registro e acompanhamento de bugs, melhorias e novas funcionalidades do projeto Spane.**
 
-<img width="1397" height="423" alt="Captura de tela 2026-06-22 003432" src="https://github.com/user-attachments/assets/933621ad-46af-420c-ab69-7a8b768c6b4e" />
+<img width="1267" height="313" alt="Captura de tela 2026-06-22 150924" src="https://github.com/user-attachments/assets/fa9d1411-1f5d-4341-bcda-5240b7c12d32" />
 
 
 **Mouse desaparecendo (Corrigido)**
