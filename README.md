@@ -9,10 +9,7 @@ A proposta não é criar apenas "joguinhos de matemática sem graça", mas sim r
 
 ## Screencast
 **Vídeo apresentando a navegação na SPANE Engine e a seleção de um de seus jogos, o Logic Snake.**
-
-
-https://github.com/user-attachments/assets/f48e596b-3bce-4c9b-9da5-b17c600464bf
-
+https://www.youtube.com/watch?v=yJwiTBg43fY
 
 ## Principais Ferramentas ⚙️:
 
@@ -30,7 +27,10 @@ https://github.com/user-attachments/assets/f48e596b-3bce-4c9b-9da5-b17c600464bf
 
 
 ## Tela do quadro Kanban
-ㅤ<img width="1365" height="767" alt="Captura de tela 2026-06-20 234953" src="https://github.com/user-attachments/assets/710b8dc5-f769-41eb-861d-cdd3122bc0b0" />
+<img width="1438" height="715" alt="Captura de tela 2026-06-22 000203" src="https://github.com/user-attachments/assets/bb51a60b-9b2d-45e9-9bf9-0fa67ac162ff" />
+
+<img width="1457" height="712" alt="Captura de tela 2026-06-22 000255" src="https://github.com/user-attachments/assets/0fbc65b0-3404-4d7c-95e5-8fef2f07ed0c" />
+
 
 
 ## Bug Tracker
