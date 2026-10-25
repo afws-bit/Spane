@@ -25,6 +25,7 @@ BINARY_NAME="spane"
 BUILD_DIR="/tmp/spane_build_$$"
 
 WEB_MODE=false
+DIRECT_MODE=""
 
 if [ "$(id -u)" = "0" ]; then
     SUDO=""
@@ -619,6 +620,40 @@ EOF
 
 cleanup() { rm -rf "$BUILD_DIR" 2>/dev/null; }
 
+run_update_flow() {
+    install_build_tools
+    install_zenity
+    
+    if [ "$WEB_MODE" = false ]; then
+        install_x11_libs
+    fi
+    
+    if perform_update; then
+        games=$(ls "$GAMES_DIR"/*.so 2>/dev/null | wc -l)
+        
+        echo ""
+        echo "╔════════════════════════════════╗"
+        echo "║    Update Complete!            ║"
+        echo "║                                ║"
+        echo "║  ✓ Gamedata preserved          ║"
+        has_x11 && echo "║  spane          X11 mode       ║"
+        echo "║  spane --web    Web mode       ║"
+        echo "║  Games: $games                    ║"
+        echo "╚════════════════════════════════╝"
+        echo ""
+        return 0
+    else
+        echo ""
+        echo "╔════════════════════════════════╗"
+        echo "║    Update Failed!              ║"
+        echo "║                                ║"
+        echo "║  Check error messages above    ║"
+        echo "╚════════════════════════════════╝"
+        echo ""
+        return 1
+    fi
+}
+
 uninstall_spane() {
     log_message "Uninstalling..."
     [ -L "$BIN_DIR/$BINARY_NAME" ] && $SUDO rm -f "$BIN_DIR/$BINARY_NAME"
@@ -632,6 +667,8 @@ show_help() {
     echo "Usage: $0 [OPTIONS]"
     echo "  --install    Install (default)"
     echo "  --web        Web-only install (skip X11)"
+    echo "  -u, --update Update (preserve gamedata, no menu)"
+    echo "  -ru, --reinstall  Remove completely and reinstall (no menu)"
     echo "  --uninstall  Remove"
     echo "  --help       This help"
 }
@@ -641,9 +678,11 @@ show_help() {
 # =============================================================================
 
 case "${1:-}" in
-    --uninstall|-u) uninstall_spane; exit 0 ;;
+    --uninstall) uninstall_spane; exit 0 ;;
     --help|-h) show_help; exit 0 ;;
     --web) WEB_MODE=true ;;
+    -ru|--reinstall) DIRECT_MODE="reinstall" ;;
+    -u|--update) DIRECT_MODE="update" ;;
 esac
 
 echo ""
@@ -653,45 +692,33 @@ echo "║  SPANE Game Engine Installer   ║"
 echo "╚════════════════════════════════╝"
 echo ""
 
+# Handle direct reinstall request (-ru): remove old version, then fall through to fresh install
+if [ "$DIRECT_MODE" = "reinstall" ]; then
+    log_message "Reinstall requested (-ru): removing old version completely..."
+    if [ -d "$INSTALL_DIR" ] || [ -L "$BIN_DIR/$BINARY_NAME" ]; then
+        uninstall_spane
+    else
+        log_message "No existing installation found - performing fresh install"
+    fi
+fi
+
+# Handle direct update request (-u): update preserving gamedata, then exit
+if [ "$DIRECT_MODE" = "update" ]; then
+    if [ -d "$INSTALL_DIR" ]; then
+        log_message "Update requested (-u): updating while preserving gamedata..."
+        run_update_flow
+        exit $?
+    else
+        log_message "No existing installation found - performing fresh install"
+    fi
+fi
+
 if [ -d "$INSTALL_DIR" ]; then
     log_message "Existing installation found"
     printf "[1]=Update (preserve gamedata) [2]=Remove [3]=Exit: "
     read choice
     case "$choice" in
-        1) 
-            # Perform update with gamedata preservation
-            install_build_tools
-            install_zenity
-            
-            if [ "$WEB_MODE" = false ]; then
-                install_x11_libs
-            fi
-            
-            if perform_update; then
-                games=$(ls "$GAMES_DIR"/*.so 2>/dev/null | wc -l)
-                
-                echo ""
-                echo "╔════════════════════════════════╗"
-                echo "║    Update Complete!            ║"
-                echo "║                                ║"
-                echo "║  ✓ Gamedata preserved          ║"
-                has_x11 && echo "║  spane          X11 mode       ║"
-                echo "║  spane --web    Web mode       ║"
-                echo "║  Games: $games                    ║"
-                echo "╚════════════════════════════════╝"
-                echo ""
-            else
-                echo ""
-                echo "╔════════════════════════════════╗"
-                echo "║    Update Failed!              ║"
-                echo "║                                ║"
-                echo "║  Check error messages above    ║"
-                echo "╚════════════════════════════════╝"
-                echo ""
-                exit 1
-            fi
-            exit 0
-            ;;
+        1) run_update_flow; exit $? ;;
         2) uninstall_spane; exit 0 ;;
         *) exit 0 ;;
     esac
