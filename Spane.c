@@ -46,6 +46,12 @@
 #define MAX_GAMES          20
 #define MAX_PATH           512
 
+// Built-in file browser (replaces zenity)
+#define FB_MAX_ENTRIES   256
+#define FB_MAX_NAME      256
+#define FB_ROW_HEIGHT     24
+#define FB_VISIBLE_ROWS   15
+
 #define WEB_PORT 3000
 #define STATE_DIR "~/.spane"
 #define SHM_NAME "/spane_shared_state"
@@ -188,6 +194,21 @@ typedef struct {
     int lock;
 } SharedState;
 
+typedef struct {
+    char name[FB_MAX_NAME];
+    int is_dir;
+} FileEntry;
+
+typedef struct {
+    int active;
+    char current_dir[MAX_PATH * 2];
+    FileEntry entries[FB_MAX_ENTRIES];
+    int count;
+    int selected;
+    int scroll;
+    int hover_button;
+} FileBrowser;
+
 struct GameManager {
     Framebuffer framebuffer;
     GameProcess* games[MAX_GAMES];
@@ -221,6 +242,7 @@ struct GameManager {
     Atom wm_fullscreen;
     
     ScreenDimensions screen;
+    FileBrowser file_browser;
 };
 
 // =============================================================================
@@ -1309,6 +1331,338 @@ static void remove_game_instance(GameManager* gm, int index) {
 }
 
 // =============================================================================
+// FILE BROWSER (Built-in, no zenity)
+// =============================================================================
+
+static void file_browser_load_dir(FileBrowser* fbr, const char* path) {
+    if (!fbr || !path) return;
+    
+    DIR* dir = opendir(path);
+    if (!dir) {
+        printf("File browser: cannot open %s\n", path);
+        return;
+    }
+    
+    strncpy(fbr->current_dir, path, sizeof(fbr->current_dir) - 1);
+    fbr->current_dir[sizeof(fbr->current_dir) - 1] = 0;
+    fbr->count = 0;
+    fbr->selected = 0;
+    fbr->scroll = 0;
+    fbr->hover_button = -1;
+    
+    if (strcmp(path, "/") != 0) {
+        strcpy(fbr->entries[fbr->count].name, "..");
+        fbr->entries[fbr->count].is_dir = 1;
+        fbr->count++;
+    }
+    
+    struct dirent* entry;
+    while ((entry = readdir(dir)) != NULL) {
+        if (strcmp(entry->d_name, ".") == 0) continue;
+        if (strcmp(entry->d_name, "..") == 0) continue;
+        if (fbr->count >= FB_MAX_ENTRIES) break;
+        
+        char full_path[MAX_PATH * 2];
+        snprintf(full_path, sizeof(full_path), "%s/%s", path, entry->d_name);
+        
+        struct stat st;
+        if (stat(full_path, &st) != 0) continue;
+        
+        if (S_ISDIR(st.st_mode)) {
+            strncpy(fbr->entries[fbr->count].name, entry->d_name, FB_MAX_NAME - 1);
+            fbr->entries[fbr->count].name[FB_MAX_NAME - 1] = 0;
+            fbr->entries[fbr->count].is_dir = 1;
+            fbr->count++;
+        } else if (S_ISREG(st.st_mode)) {
+            int len = strlen(entry->d_name);
+            if (len > 3 && strcmp(entry->d_name + len - 3, ".so") == 0) {
+                strncpy(fbr->entries[fbr->count].name, entry->d_name, FB_MAX_NAME - 1);
+                fbr->entries[fbr->count].name[FB_MAX_NAME - 1] = 0;
+                fbr->entries[fbr->count].is_dir = 0;
+                fbr->count++;
+            }
+        }
+    }
+    closedir(dir);
+    
+    int start = (fbr->count > 0 && strcmp(fbr->entries[0].name, "..") == 0) ? 1 : 0;
+    for (int i = start; i < fbr->count - 1; i++) {
+        for (int j = i + 1; j < fbr->count; j++) {
+            int swap = 0;
+            if (fbr->entries[i].is_dir != fbr->entries[j].is_dir) {
+                swap = (fbr->entries[i].is_dir < fbr->entries[j].is_dir);
+            } else {
+                swap = (strcmp(fbr->entries[i].name, fbr->entries[j].name) > 0);
+            }
+            if (swap) {
+                FileEntry tmp = fbr->entries[i];
+                fbr->entries[i] = fbr->entries[j];
+                fbr->entries[j] = tmp;
+            }
+        }
+    }
+}
+
+static void file_browser_open(GameManager* gm) {
+    if (!gm) return;
+    
+    gm->file_browser.active = 1;
+    gm->file_browser.hover_button = -1;
+    
+    char start_dir[MAX_PATH * 2];
+    if (gm->file_browser.current_dir[0] == 0) {
+        char cwd[MAX_PATH * 2];
+        if (getcwd(cwd, sizeof(cwd))) {
+            char games_path[MAX_PATH * 2];
+            snprintf(games_path, sizeof(games_path), "%s/games", cwd);
+            struct stat st;
+            if (stat(games_path, &st) == 0 && S_ISDIR(st.st_mode)) {
+                strncpy(start_dir, games_path, sizeof(start_dir) - 1);
+            } else {
+                strncpy(start_dir, cwd, sizeof(start_dir) - 1);
+            }
+            start_dir[sizeof(start_dir) - 1] = 0;
+        } else {
+            strcpy(start_dir, "/");
+        }
+    } else {
+        strncpy(start_dir, gm->file_browser.current_dir, sizeof(start_dir) - 1);
+        start_dir[sizeof(start_dir) - 1] = 0;
+    }
+    
+    file_browser_load_dir(&gm->file_browser, start_dir);
+}
+
+static void file_browser_render(Framebuffer* fb, GameManager* gm) {
+    if (!fb || !gm || !gm->file_browser.active) return;
+    FileBrowser* fbr = &gm->file_browser;
+    
+    for (int y = BASE_GAME_AREA_Y; y < BASE_GAME_AREA_Y + BASE_GAME_AREA_HEIGHT; y++) {
+        for (int x = BASE_GAME_AREA_X; x < BASE_GAME_AREA_X + BASE_GAME_AREA_WIDTH; x++) {
+            int i = (y * BASE_WINDOW_WIDTH + x) * 4;
+            fb->pixels[i] = fb->pixels[i] / 3;
+            fb->pixels[i + 1] = fb->pixels[i + 1] / 3;
+            fb->pixels[i + 2] = fb->pixels[i + 2] / 3;
+        }
+    }
+    
+    int dw = 720, dh = 520;
+    int dx = BASE_GAME_AREA_X + (BASE_GAME_AREA_WIDTH - dw) / 2;
+    int dy = BASE_GAME_AREA_Y + (BASE_GAME_AREA_HEIGHT - dh) / 2;
+    
+    fb_fill(fb, dx + 4, dy + 4, dw, dh, 0x00, 0x00, 0x00);
+    fb_fill(fb, dx, dy, dw, dh, 0x1E, 0x1E, 0x2E);
+    fb_rect(fb, dx, dy, dw, dh, 0x00, 0xAA, 0xCC);
+    fb_rect(fb, dx + 1, dy + 1, dw - 2, dh - 2, 0x00, 0x66, 0x88);
+    
+    fb_fill(fb, dx + 2, dy + 2, dw - 4, 28, 0x00, 0x55, 0x88);
+    fb_text_center(fb, dx, dy + 10, dw, "SELECT GAME FILE", 0xFF, 0xFF, 0xFF);
+    
+    fb_fill(fb, dx + 10, dy + 38, dw - 20, 22, 0x08, 0x08, 0x18);
+    fb_rect(fb, dx + 10, dy + 38, dw - 20, 22, 0x33, 0x44, 0x55);
+    
+    char path_display[MAX_PATH * 2];
+    snprintf(path_display, sizeof(path_display), "%s", fbr->current_dir);
+    int max_chars = (dw - 40) / 6;
+    int plen = strlen(path_display);
+    if (plen > max_chars) {
+        char suffix[MAX_PATH * 2];
+        int keep = max_chars - 3;
+        if (keep < 1) keep = 1;
+        strncpy(suffix, path_display + (plen - keep), keep);
+        suffix[keep] = 0;
+        snprintf(path_display, sizeof(path_display), "...%s", suffix);
+    }
+    fb_text(fb, dx + 16, dy + 44, path_display, 0x88, 0xCC, 0xFF);
+    
+    fb_fill(fb, dx + 10, dy + 66, dw - 20, 1, 0x33, 0x44, 0x55);
+    
+    int list_x = dx + 14;
+    int list_y = dy + 72;
+    int list_w = dw - 28;
+    int list_h = FB_VISIBLE_ROWS * FB_ROW_HEIGHT;
+    
+    if (fbr->selected < fbr->scroll) fbr->scroll = fbr->selected;
+    if (fbr->selected >= fbr->scroll + FB_VISIBLE_ROWS)
+        fbr->scroll = fbr->selected - FB_VISIBLE_ROWS + 1;
+    if (fbr->scroll < 0) fbr->scroll = 0;
+    if (fbr->count > FB_VISIBLE_ROWS && fbr->scroll > fbr->count - FB_VISIBLE_ROWS)
+        fbr->scroll = fbr->count - FB_VISIBLE_ROWS;
+    
+    for (int i = 0; i < FB_VISIBLE_ROWS; i++) {
+        int idx = fbr->scroll + i;
+        if (idx >= fbr->count) break;
+        
+        int ry = list_y + i * FB_ROW_HEIGHT;
+        int sel = (idx == fbr->selected);
+        int hov = (fbr->hover_button == idx);
+        
+        unsigned char br, bg, bb;
+        if (sel) { br = 0x00; bg = 0x66; bb = 0xAA; }
+        else if (hov) { br = 0x22; bg = 0x33; bb = 0x44; }
+        else { br = 0x18; bg = 0x18; bb = 0x28; }
+        
+        fb_fill(fb, list_x, ry, list_w, FB_ROW_HEIGHT - 2, br, bg, bb);
+        if (sel) fb_rect(fb, list_x, ry, list_w, FB_ROW_HEIGHT - 2, 0x00, 0xCC, 0xFF);
+        
+        FileEntry* e = &fbr->entries[idx];
+        const char* icon = e->is_dir ? "[D]" : "[F]";
+        unsigned char tr = e->is_dir ? 0xFF : 0xCC;
+        unsigned char tg = 0xCC;
+        unsigned char tb = e->is_dir ? 0x00 : 0xCC;
+        
+        fb_text(fb, list_x + 8, ry + 8, icon, tr, tg, tb);
+        
+        char name_buf[96];
+        strncpy(name_buf, e->name, sizeof(name_buf) - 1);
+        name_buf[sizeof(name_buf) - 1] = 0;
+        if (strlen(e->name) >= sizeof(name_buf)) {
+            name_buf[sizeof(name_buf) - 4] = '.';
+            name_buf[sizeof(name_buf) - 3] = '.';
+            name_buf[sizeof(name_buf) - 2] = '.';
+            name_buf[sizeof(name_buf) - 1] = 0;
+        }
+        fb_text(fb, list_x + 40, ry + 8, name_buf, tr, tg, tb);
+    }
+    
+    if (fbr->count > FB_VISIBLE_ROWS) {
+        int sb_x = dx + dw - 12;
+        fb_fill(fb, sb_x, list_y, 6, list_h, 0x15, 0x15, 0x25);
+        int thumb_h = (FB_VISIBLE_ROWS * list_h) / fbr->count;
+        if (thumb_h < 10) thumb_h = 10;
+        int max_scroll = fbr->count - FB_VISIBLE_ROWS;
+        int thumb_y = list_y + ((list_h - thumb_h) * fbr->scroll) / (max_scroll > 0 ? max_scroll : 1);
+        fb_fill(fb, sb_x, thumb_y, 6, thumb_h, 0x00, 0x66, 0xAA);
+    }
+    
+    int btn_y = dy + dh - 52;
+    int btn_h = 36;
+    int cancel_x = dx + dw - 150;
+    int cancel_w = 130;
+    
+    int cancel_hover = (fbr->hover_button == 100);
+    fb_fill(fb, cancel_x, btn_y, cancel_w, btn_h,
+            cancel_hover ? 0xCC : 0x88, 0x22, 0x22);
+    fb_rect(fb, cancel_x, btn_y, cancel_w, btn_h, 0xFF, 0x44, 0x44);
+    fb_text_center(fb, cancel_x, btn_y + 12, cancel_w, "[ CANCEL ]", 0xFF, 0xFF, 0xFF);
+    
+    fb_text(fb, dx + 20, btn_y + 12, "Up/Down: navigate | Enter: open | Esc: cancel", 0x88, 0x88, 0x88);
+}
+
+static void file_browser_click(GameManager* gm, int base_x, int base_y) {
+    if (!gm || !gm->file_browser.active) return;
+    FileBrowser* fbr = &gm->file_browser;
+    
+    int dw = 720, dh = 520;
+    int dx = BASE_GAME_AREA_X + (BASE_GAME_AREA_WIDTH - dw) / 2;
+    int dy = BASE_GAME_AREA_Y + (BASE_GAME_AREA_HEIGHT - dh) / 2;
+    
+    if (base_x < dx || base_x >= dx + dw || base_y < dy || base_y >= dy + dh) {
+        fbr->active = 0;
+        return;
+    }
+    
+    int list_x = dx + 14;
+    int list_y = dy + 72;
+    int list_w = dw - 28;
+    int list_h = FB_VISIBLE_ROWS * FB_ROW_HEIGHT;
+    
+    int btn_y = dy + dh - 52;
+    int btn_h = 36;
+    int cancel_x = dx + dw - 150;
+    int cancel_w = 130;
+    
+    if (base_x >= cancel_x && base_x < cancel_x + cancel_w &&
+        base_y >= btn_y && base_y < btn_y + btn_h) {
+        fbr->active = 0;
+        return;
+    }
+    
+    if (base_x >= list_x && base_x < list_x + list_w &&
+        base_y >= list_y && base_y < list_y + list_h) {
+        int row = (base_y - list_y) / FB_ROW_HEIGHT;
+        int idx = fbr->scroll + row;
+        if (idx < 0 || idx >= fbr->count) return;
+        
+        FileEntry* e = &fbr->entries[idx];
+        fbr->selected = idx;
+        
+        if (e->is_dir) {
+            char new_dir[MAX_PATH * 2];
+            if (strcmp(e->name, "..") == 0) {
+                strncpy(new_dir, fbr->current_dir, sizeof(new_dir) - 1);
+                new_dir[sizeof(new_dir) - 1] = 0;
+                char* last = strrchr(new_dir, '/');
+                if (last && last != new_dir) *last = 0;
+                else if (last == new_dir) new_dir[1] = 0;
+            } else {
+                snprintf(new_dir, sizeof(new_dir), "%s/%s", fbr->current_dir, e->name);
+            }
+            file_browser_load_dir(fbr, new_dir);
+        } else {
+            char full_path[MAX_PATH * 2];
+            snprintf(full_path, sizeof(full_path), "%s/%s", fbr->current_dir, e->name);
+            printf("Loading game: %s\n", full_path);
+            if (load_game_from_so(gm, full_path)) {
+                gm->current_game = gm->game_count - 1;
+                sync_to_shared(gm);
+                save_disk_backup(gm);
+            }
+            fbr->active = 0;
+        }
+    }
+}
+
+static void file_browser_key(GameManager* gm, int key_code) {
+    if (!gm || !gm->file_browser.active) return;
+    FileBrowser* fbr = &gm->file_browser;
+    
+    if (key_code == 27) {
+        fbr->active = 0;
+        return;
+    }
+    
+    if (key_code == 38 || key_code == 87) {
+        if (fbr->selected > 0) fbr->selected--;
+        return;
+    }
+    
+    if (key_code == 40 || key_code == 83) {
+        if (fbr->selected < fbr->count - 1) fbr->selected++;
+        return;
+    }
+    
+    if (key_code == 13 || key_code == 32) {
+        if (fbr->selected < 0 || fbr->selected >= fbr->count) return;
+        
+        FileEntry* e = &fbr->entries[fbr->selected];
+        if (e->is_dir) {
+            char new_dir[MAX_PATH * 2];
+            if (strcmp(e->name, "..") == 0) {
+                strncpy(new_dir, fbr->current_dir, sizeof(new_dir) - 1);
+                new_dir[sizeof(new_dir) - 1] = 0;
+                char* last = strrchr(new_dir, '/');
+                if (last && last != new_dir) *last = 0;
+                else if (last == new_dir) new_dir[1] = 0;
+            } else {
+                snprintf(new_dir, sizeof(new_dir), "%s/%s", fbr->current_dir, e->name);
+            }
+            file_browser_load_dir(fbr, new_dir);
+        } else {
+            char full_path[MAX_PATH * 2];
+            snprintf(full_path, sizeof(full_path), "%s/%s", fbr->current_dir, e->name);
+            printf("Loading game: %s\n", full_path);
+            if (load_game_from_so(gm, full_path)) {
+                gm->current_game = gm->game_count - 1;
+                sync_to_shared(gm);
+                save_disk_backup(gm);
+            }
+            fbr->active = 0;
+        }
+    }
+}
+
+// =============================================================================
 // RENDERING
 // =============================================================================
 
@@ -1420,6 +1774,10 @@ no_game:
         }
     }
     
+    if (gm->file_browser.active) {
+        file_browser_render(fb, gm);
+    }
+    
     pthread_mutex_unlock(&gm->fb_mutex);
 }
 
@@ -1442,29 +1800,18 @@ static void gm_click(GameManager* gm, int x, int y) {
     int base_x, base_y;
     screen_to_base_coords(gm, x, y, &base_x, &base_y);
     
+    // Built-in file browser takes priority when active
+    if (gm->file_browser.active) {
+        file_browser_click(gm, base_x, base_y);
+        return;
+    }
+    
     // Check Load Game and Clear All buttons (bottom of sidebar)
     int lby = BASE_WINDOW_HEIGHT - 110;
     if (base_x >= 10 && base_x < BASE_SIDEBAR_WIDTH-10) {
         if (base_y >= lby && base_y < lby+28) {
             printf("Load Game button clicked\n");
-            int ret __attribute__((unused));
-            ret = system("zenity --file-selection --title=\"Select Game .so file\" "
-                   "--file-filter=\"Shared Objects (*.so) | *.so\" "
-                   "> /tmp/spane_load.txt 2>/dev/null");
-            FILE* f = fopen("/tmp/spane_load.txt", "r");
-            if (f) {
-                char path[MAX_PATH];
-                if (fgets(path, sizeof(path), f)) {
-                    path[strcspn(path, "\n")] = 0;
-                    if (strlen(path) > 0 && load_game_from_so(gm, path)) {
-                        gm->current_game = gm->game_count - 1;
-                        sync_to_shared(gm);
-                        save_disk_backup(gm);
-                    }
-                }
-                fclose(f);
-            }
-            remove("/tmp/spane_load.txt");
+            file_browser_open(gm);
             return;
         }
         
@@ -1807,7 +2154,10 @@ static void x11_process(GameManager* gm, int* running) {
         
         if (e.type == KeyPress) {
             int k = x11_to_keycode(XLookupKeysym(&e.xkey, 0));
-            if (k >= 112 && k <= 115) gm_switch(gm, k - 112);
+            if (gm->file_browser.active) {
+                file_browser_key(gm, k);
+            }
+            else if (k >= 112 && k <= 115) gm_switch(gm, k - 112);
             else if (gm->current_game >= 0 && gm->current_game < gm->game_count) {
                 GameProcess* game = gm->games[gm->current_game];
                 if (game && game->active && !game->has_error && !game->error_dialog)
@@ -1816,7 +2166,7 @@ static void x11_process(GameManager* gm, int* running) {
         }
         else if (e.type == KeyRelease) {
             int k = x11_to_keycode(XLookupKeysym(&e.xkey, 0));
-            if (k && gm->current_game >= 0 && gm->current_game < gm->game_count) {
+            if (!gm->file_browser.active && k && gm->current_game >= 0 && gm->current_game < gm->game_count) {
                 GameProcess* game = gm->games[gm->current_game];
                 if (game && game->active && !game->has_error && !game->error_dialog)
                     send_input_to_game(gm, game, 1, k, 0, 0, 0);
@@ -1835,52 +2185,79 @@ static void x11_process(GameManager* gm, int* running) {
             
             gm->hover_button = -1;
             
-            // Hover tracking for error dialog buttons
-            if (gm->current_game >= 0 && gm->current_game < gm->game_count) {
-                GameProcess* game = gm->games[gm->current_game];
-                if (game && game->error_dialog && game->has_error) {
-                    int dx = BASE_GAME_AREA_X + 100;
-                    int dy = BASE_GAME_AREA_Y + 150;
-                    int dw = BASE_GAME_AREA_WIDTH - 200;
-                    int dh = gm->dev_mode ? 320 : 280;
-                    int btn_w = 130;
-                    int btn_h = 40;
-                    int btn_y = dy + dh - 80;
-                    int restart_x = dx + (dw/2) - btn_w - 15;
-                    int close_x = dx + (dw/2) + 15;
-                    
-                    if (base_x >= restart_x && base_x < restart_x + btn_w &&
-                        base_y >= btn_y && base_y < btn_y + btn_h) {
-                        game->error_dialog_button = 0;
-                    } else if (base_x >= close_x && base_x < close_x + btn_w &&
-                               base_y >= btn_y && base_y < btn_y + btn_h) {
-                        game->error_dialog_button = 1;
-                    } else if (gm->dev_mode) {
-                        int copy_y = btn_y + btn_h + 10;
-                        int copy_x = dx + (dw/2) - btn_w/2;
+            if (gm->file_browser.active) {
+                FileBrowser* fbr = &gm->file_browser;
+                int fbw = 720, fbh = 520;
+                int fbx = BASE_GAME_AREA_X + (BASE_GAME_AREA_WIDTH - fbw) / 2;
+                int fby = BASE_GAME_AREA_Y + (BASE_GAME_AREA_HEIGHT - fbh) / 2;
+                int list_x = fbx + 14;
+                int list_y = fby + 72;
+                int list_w = fbw - 28;
+                int list_h = FB_VISIBLE_ROWS * FB_ROW_HEIGHT;
+                int btn_y = fby + fbh - 52;
+                int btn_h = 36;
+                int cancel_x = fbx + fbw - 150;
+                int cancel_w = 130;
+                
+                fbr->hover_button = -1;
+                if (base_x >= cancel_x && base_x < cancel_x + cancel_w &&
+                    base_y >= btn_y && base_y < btn_y + btn_h) {
+                    fbr->hover_button = 100;
+                } else if (base_x >= list_x && base_x < list_x + list_w &&
+                           base_y >= list_y && base_y < list_y + list_h) {
+                    int row = (base_y - list_y) / FB_ROW_HEIGHT;
+                    int idx = fbr->scroll + row;
+                    if (idx >= 0 && idx < fbr->count) fbr->hover_button = idx;
+                }
+            }
+            else {
+                // Hover tracking for error dialog buttons
+                if (gm->current_game >= 0 && gm->current_game < gm->game_count) {
+                    GameProcess* game = gm->games[gm->current_game];
+                    if (game && game->error_dialog && game->has_error) {
+                        int dx = BASE_GAME_AREA_X + 100;
+                        int dy = BASE_GAME_AREA_Y + 150;
+                        int dw = BASE_GAME_AREA_WIDTH - 200;
+                        int dh = gm->dev_mode ? 320 : 280;
+                        int btn_w = 130;
+                        int btn_h = 40;
+                        int btn_y = dy + dh - 80;
+                        int restart_x = dx + (dw/2) - btn_w - 15;
+                        int close_x = dx + (dw/2) + 15;
                         
-                        if (base_x >= copy_x && base_x < copy_x + btn_w &&
-                            base_y >= copy_y && base_y < copy_y + btn_h - 5) {
-                            game->error_dialog_button = 2;
+                        if (base_x >= restart_x && base_x < restart_x + btn_w &&
+                            base_y >= btn_y && base_y < btn_y + btn_h) {
+                            game->error_dialog_button = 0;
+                        } else if (base_x >= close_x && base_x < close_x + btn_w &&
+                                   base_y >= btn_y && base_y < btn_y + btn_h) {
+                            game->error_dialog_button = 1;
+                        } else if (gm->dev_mode) {
+                            int copy_y = btn_y + btn_h + 10;
+                            int copy_x = dx + (dw/2) - btn_w/2;
+                            
+                            if (base_x >= copy_x && base_x < copy_x + btn_w &&
+                                base_y >= copy_y && base_y < copy_y + btn_h - 5) {
+                                game->error_dialog_button = 2;
+                            } else {
+                                game->error_dialog_button = -1;
+                            }
                         } else {
                             game->error_dialog_button = -1;
                         }
-                    } else {
-                        game->error_dialog_button = -1;
                     }
                 }
-            }
-            
-            // Sidebar hover
-            if (base_x < BASE_SIDEBAR_WIDTH) {
-                int by = gm->dev_mode ? 65 : 55;
-                for (int i = 0; i < gm->game_count; i++) {
-                    if (base_y >= by && base_y < by+35 
-                        && base_x >= 10 && base_x < BASE_SIDEBAR_WIDTH-32) {
-                        gm->hover_button = i;
-                        break;
+                
+                // Sidebar hover
+                if (base_x < BASE_SIDEBAR_WIDTH) {
+                    int by = gm->dev_mode ? 65 : 55;
+                    for (int i = 0; i < gm->game_count; i++) {
+                        if (base_y >= by && base_y < by+35 
+                            && base_x >= 10 && base_x < BASE_SIDEBAR_WIDTH-32) {
+                            gm->hover_button = i;
+                            break;
+                        }
+                        by += 45;
                     }
-                    by += 45;
                 }
             }
         }
@@ -1990,49 +2367,76 @@ static void whandle(WebServer* w, int cf) {
             w->gm->mouse_y = y;
             w->gm->hover_button = -1;
             
-            if (w->gm->current_game >= 0 && w->gm->current_game < w->gm->game_count) {
-                GameProcess* game = w->gm->games[w->gm->current_game];
-                if (game && game->error_dialog && game->has_error) {
-                    int dx = BASE_GAME_AREA_X + 100;
-                    int dy = BASE_GAME_AREA_Y + 150;
-                    int dw = BASE_GAME_AREA_WIDTH - 200;
-                    int dh = w->gm->dev_mode ? 320 : 280;
-                    int btn_w = 130;
-                    int btn_h = 40;
-                    int btn_y = dy + dh - 80;
-                    int restart_x = dx + (dw/2) - btn_w - 15;
-                    int close_x = dx + (dw/2) + 15;
-                    
-                    if (x >= restart_x && x < restart_x + btn_w &&
-                        y >= btn_y && y < btn_y + btn_h) {
-                        game->error_dialog_button = 0;
-                    } else if (x >= close_x && x < close_x + btn_w &&
-                               y >= btn_y && y < btn_y + btn_h) {
-                        game->error_dialog_button = 1;
-                    } else if (w->gm->dev_mode) {
-                        int copy_y = btn_y + btn_h + 10;
-                        int copy_x = dx + (dw/2) - btn_w/2;
+            if (w->gm->file_browser.active) {
+                FileBrowser* fbr = &w->gm->file_browser;
+                int fbw = 720, fbh = 520;
+                int fbx = BASE_GAME_AREA_X + (BASE_GAME_AREA_WIDTH - fbw) / 2;
+                int fby = BASE_GAME_AREA_Y + (BASE_GAME_AREA_HEIGHT - fbh) / 2;
+                int list_x = fbx + 14;
+                int list_y = fby + 72;
+                int list_w = fbw - 28;
+                int list_h = FB_VISIBLE_ROWS * FB_ROW_HEIGHT;
+                int btn_y = fby + fbh - 52;
+                int btn_h = 36;
+                int cancel_x = fbx + fbw - 150;
+                int cancel_w = 130;
+                
+                fbr->hover_button = -1;
+                if (x >= cancel_x && x < cancel_x + cancel_w &&
+                    y >= btn_y && y < btn_y + btn_h) {
+                    fbr->hover_button = 100;
+                } else if (x >= list_x && x < list_x + list_w &&
+                           y >= list_y && y < list_y + list_h) {
+                    int row = (y - list_y) / FB_ROW_HEIGHT;
+                    int idx = fbr->scroll + row;
+                    if (idx >= 0 && idx < fbr->count) fbr->hover_button = idx;
+                }
+            }
+            else {
+                if (w->gm->current_game >= 0 && w->gm->current_game < w->gm->game_count) {
+                    GameProcess* game = w->gm->games[w->gm->current_game];
+                    if (game && game->error_dialog && game->has_error) {
+                        int dx = BASE_GAME_AREA_X + 100;
+                        int dy = BASE_GAME_AREA_Y + 150;
+                        int dw = BASE_GAME_AREA_WIDTH - 200;
+                        int dh = w->gm->dev_mode ? 320 : 280;
+                        int btn_w = 130;
+                        int btn_h = 40;
+                        int btn_y = dy + dh - 80;
+                        int restart_x = dx + (dw/2) - btn_w - 15;
+                        int close_x = dx + (dw/2) + 15;
                         
-                        if (x >= copy_x && x < copy_x + btn_w &&
-                            y >= copy_y && y < copy_y + btn_h - 5) {
-                            game->error_dialog_button = 2;
+                        if (x >= restart_x && x < restart_x + btn_w &&
+                            y >= btn_y && y < btn_y + btn_h) {
+                            game->error_dialog_button = 0;
+                        } else if (x >= close_x && x < close_x + btn_w &&
+                                   y >= btn_y && y < btn_y + btn_h) {
+                            game->error_dialog_button = 1;
+                        } else if (w->gm->dev_mode) {
+                            int copy_y = btn_y + btn_h + 10;
+                            int copy_x = dx + (dw/2) - btn_w/2;
+                            
+                            if (x >= copy_x && x < copy_x + btn_w &&
+                                y >= copy_y && y < copy_y + btn_h - 5) {
+                                game->error_dialog_button = 2;
+                            } else {
+                                game->error_dialog_button = -1;
+                            }
                         } else {
                             game->error_dialog_button = -1;
                         }
-                    } else {
-                        game->error_dialog_button = -1;
                     }
                 }
-            }
-            
-            if (x < BASE_SIDEBAR_WIDTH) {
-                int by = w->gm->dev_mode ? 65 : 55;
-                for (int i = 0; i < w->gm->game_count; i++) {
-                    if (y >= by && y < by+35 && x >= 10 && x < BASE_SIDEBAR_WIDTH-32) {
-                        w->gm->hover_button = i;
-                        break;
+                
+                if (x < BASE_SIDEBAR_WIDTH) {
+                    int by = w->gm->dev_mode ? 65 : 55;
+                    for (int i = 0; i < w->gm->game_count; i++) {
+                        if (y >= by && y < by+35 && x >= 10 && x < BASE_SIDEBAR_WIDTH-32) {
+                            w->gm->hover_button = i;
+                            break;
+                        }
+                        by += 45;
                     }
-                    by += 45;
                 }
             }
         }
@@ -2041,7 +2445,10 @@ static void whandle(WebServer* w, int cf) {
         }
         else if (strcmp(t, "kd") == 0 || strcmp(t, "ku") == 0) {
             int pr = (t[1] == 'd');
-            if (k == 27) w->run = 0;
+            if (w->gm->file_browser.active) {
+                if (pr) file_browser_key(w->gm, k);
+            }
+            else if (k == 27) w->run = 0;
             else if (k >= 112 && k <= 115 && pr) gm_switch(w->gm, k - 112);
             else if (w->gm->current_game >= 0 && w->gm->current_game < w->gm->game_count) {
                 GameProcess* game = w->gm->games[w->gm->current_game];
@@ -2149,6 +2556,19 @@ int main(int argc, char** argv) {
     gm.web_mode = web;
     
     if (web) {
+        // Web mode: canvas is the base resolution, so scale = 1.0
+        // (without this, screen_to_base_coords would divide by zero)
+        gm.screen.scale_x = 1.0f;
+        gm.screen.scale_y = 1.0f;
+        gm.screen.window_width = BASE_WINDOW_WIDTH;
+        gm.screen.window_height = BASE_WINDOW_HEIGHT;
+        gm.screen.game_area_x = BASE_GAME_AREA_X;
+        gm.screen.game_area_y = BASE_GAME_AREA_Y;
+        gm.screen.game_area_width = BASE_GAME_AREA_WIDTH;
+        gm.screen.game_area_height = BASE_GAME_AREA_HEIGHT;
+        gm.screen.sidebar_width = BASE_SIDEBAR_WIDTH;
+        gm.screen.game_scale = 1.0f;
+        
         ws.gm = &gm;
         pthread_create(&ws.th, NULL, wthread, &ws);
         usleep(500000);
