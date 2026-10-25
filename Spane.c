@@ -17,6 +17,7 @@
 #include <time.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <netinet/tcp.h>
 #include <arpa/inet.h>
 #include <pthread.h>
 #include <dlfcn.h>
@@ -2290,6 +2291,10 @@ typedef struct {
     GameManager* gm;
     pthread_t th;
     int run;
+    // Web-mode performance: cached last frame so /f never blocks on fb_mutex
+    pthread_mutex_t cache_mutex;
+    unsigned char* cache;
+    int cache_valid;
 } WebServer;
 
 static WebServer ws;
@@ -2464,10 +2469,247 @@ static void whandle(WebServer* w, int cf) {
     }
 }
 
+// -----------------------------------------------------------------------------
+// Web-mode performance layer (transmission/server only - engine logic untouched)
+// -----------------------------------------------------------------------------
+
+typedef struct {
+    WebServer* w;
+    int fd;
+} WConn;
+
+static int send_all(int fd, const void* data, int len) {
+    const char* p = (const char*)data;
+    int sent = 0;
+    while (sent < len) {
+        int n = send(fd, p + sent, len - sent, 0);
+        if (n <= 0) return 0;
+        sent += n;
+    }
+    return 1;
+}
+
+// Try to acquire the framebuffer lock without blocking for long.
+static int fb_lock_timeout(pthread_mutex_t* m, int ms) {
+    if (pthread_mutex_trylock(m) == 0) return 1;
+    for (int i = 0; i < ms; i++) {
+        usleep(1000);
+        if (pthread_mutex_trylock(m) == 0) return 1;
+    }
+    return 0;
+}
+
+// Handle one HTTP request on a keep-alive connection.
+static void web_handle_request(WebServer* w, int cf, unsigned char* buf, char* req) {
+    char m[16], p[512];
+    m[0] = 0; p[0] = 0;
+    sscanf(req, "%15s %511s", m, p);
+
+    if (strcmp(p, "/") == 0 || strcmp(p, "/index.html") == 0) {
+        char h[160];
+        int hl = snprintf(h, sizeof(h),
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\n"
+            "Content-Length: %d\r\nCache-Control: no-cache\r\n"
+            "Connection: keep-alive\r\n\r\n", (int)strlen(html));
+        if (!send_all(cf, h, hl)) return;
+        send_all(cf, html, strlen(html));
+    }
+    else if (strncmp(p, "/f", 2) == 0) {
+        int sz = BASE_WINDOW_WIDTH * BASE_WINDOW_HEIGHT * 4;
+
+        // Never block the frame stream: try the render lock, else serve cached frame.
+        int locked = (pthread_mutex_trylock(&w->gm->fb_mutex) == 0);
+        pthread_mutex_lock(&w->cache_mutex);
+        if (locked) {
+            memcpy(buf, w->gm->framebuffer.pixels, sz);
+            memcpy(w->cache, buf, sz);
+            w->cache_valid = 1;
+            pthread_mutex_unlock(&w->gm->fb_mutex);
+        } else if (w->cache_valid) {
+            memcpy(buf, w->cache, sz);
+        } else {
+            // No cache yet: fall back to blocking copy (only happens on first frame).
+            pthread_mutex_unlock(&w->cache_mutex);
+            pthread_mutex_lock(&w->gm->fb_mutex);
+            memcpy(buf, w->gm->framebuffer.pixels, sz);
+            pthread_mutex_unlock(&w->gm->fb_mutex);
+            pthread_mutex_lock(&w->cache_mutex);
+            memcpy(w->cache, buf, sz);
+            w->cache_valid = 1;
+        }
+        pthread_mutex_unlock(&w->cache_mutex);
+
+        char h[256];
+        int hl = snprintf(h, sizeof(h),
+            "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n"
+            "Content-Length: %d\r\nCache-Control: no-cache,no-store\r\n"
+            "Connection: keep-alive\r\n\r\n", sz);
+        if (!send_all(cf, h, hl)) return;
+        send_all(cf, buf, sz);
+    }
+    else if (strncmp(p, "/i?", 3) == 0) {
+        char* q = strchr(p, '?');
+        char t[8] = "";
+        int x = 0, y = 0, k = 0;
+        if (q) {
+            q++;
+            char* tk = strtok(q, "&");
+            while (tk) {
+                if (strncmp(tk, "t=", 2) == 0) sscanf(tk+2, "%7s", t);
+                else if (strncmp(tk, "x=", 2) == 0) sscanf(tk+2, "%d", &x);
+                else if (strncmp(tk, "y=", 2) == 0) sscanf(tk+2, "%d", &y);
+                else if (strncmp(tk, "k=", 2) == 0) sscanf(tk+2, "%d", &k);
+                tk = strtok(NULL, "&");
+            }
+        }
+
+        // Bounded wait: input is best-effort; if the engine is busy (e.g. loading a
+        // game) drop the stale event instead of piling up and freezing the server.
+        if (fb_lock_timeout(&w->gm->fb_mutex, 50)) {
+        if (strcmp(t, "m") == 0) {
+            w->gm->mouse_x = x;
+            w->gm->mouse_y = y;
+            w->gm->hover_button = -1;
+            
+            if (w->gm->file_browser.active) {
+                FileBrowser* fbr = &w->gm->file_browser;
+                int fbw = 720, fbh = 520;
+                int fbx = BASE_GAME_AREA_X + (BASE_GAME_AREA_WIDTH - fbw) / 2;
+                int fby = BASE_GAME_AREA_Y + (BASE_GAME_AREA_HEIGHT - fbh) / 2;
+                int list_x = fbx + 14;
+                int list_y = fby + 72;
+                int list_w = fbw - 28;
+                int list_h = FB_VISIBLE_ROWS * FB_ROW_HEIGHT;
+                int btn_y = fby + fbh - 52;
+                int btn_h = 36;
+                int cancel_x = fbx + fbw - 150;
+                int cancel_w = 130;
+                
+                fbr->hover_button = -1;
+                if (x >= cancel_x && x < cancel_x + cancel_w &&
+                    y >= btn_y && y < btn_y + btn_h) {
+                    fbr->hover_button = 100;
+                } else if (x >= list_x && x < list_x + list_w &&
+                           y >= list_y && y < list_y + list_h) {
+                    int row = (y - list_y) / FB_ROW_HEIGHT;
+                    int idx = fbr->scroll + row;
+                    if (idx >= 0 && idx < fbr->count) fbr->hover_button = idx;
+                }
+            }
+            else {
+                if (w->gm->current_game >= 0 && w->gm->current_game < w->gm->game_count) {
+                    GameProcess* game = w->gm->games[w->gm->current_game];
+                    if (game && game->error_dialog && game->has_error) {
+                        int dx = BASE_GAME_AREA_X + 100;
+                        int dy = BASE_GAME_AREA_Y + 150;
+                        int dw = BASE_GAME_AREA_WIDTH - 200;
+                        int dh = w->gm->dev_mode ? 320 : 280;
+                        int btn_w = 130;
+                        int btn_h = 40;
+                        int btn_y = dy + dh - 80;
+                        int restart_x = dx + (dw/2) - btn_w - 15;
+                        int close_x = dx + (dw/2) + 15;
+                        
+                        if (x >= restart_x && x < restart_x + btn_w &&
+                            y >= btn_y && y < btn_y + btn_h) {
+                            game->error_dialog_button = 0;
+                        } else if (x >= close_x && x < close_x + btn_w &&
+                                   y >= btn_y && y < btn_y + btn_h) {
+                            game->error_dialog_button = 1;
+                        } else if (w->gm->dev_mode) {
+                            int copy_y = btn_y + btn_h + 10;
+                            int copy_x = dx + (dw/2) - btn_w/2;
+                            
+                            if (x >= copy_x && x < copy_x + btn_w &&
+                                y >= copy_y && y < copy_y + btn_h - 5) {
+                                game->error_dialog_button = 2;
+                            } else {
+                                game->error_dialog_button = -1;
+                            }
+                        } else {
+                            game->error_dialog_button = -1;
+                        }
+                    }
+                }
+                
+                if (x < BASE_SIDEBAR_WIDTH) {
+                    int by = w->gm->dev_mode ? 65 : 55;
+                    for (int i = 0; i < w->gm->game_count; i++) {
+                        if (y >= by && y < by+35 && x >= 10 && x < BASE_SIDEBAR_WIDTH-32) {
+                            w->gm->hover_button = i;
+                            break;
+                        }
+                        by += 45;
+                    }
+                }
+            }
+        }
+        else if (strcmp(t, "c") == 0) {
+            gm_click(w->gm, x, y);
+        }
+        else if (strcmp(t, "kd") == 0 || strcmp(t, "ku") == 0) {
+            int pr = (t[1] == 'd');
+            if (w->gm->file_browser.active) {
+                if (pr) file_browser_key(w->gm, k);
+            }
+            else if (k == 27) w->run = 0;
+            else if (k >= 112 && k <= 115 && pr) gm_switch(w->gm, k - 112);
+            else if (w->gm->current_game >= 0 && w->gm->current_game < w->gm->game_count) {
+                GameProcess* game = w->gm->games[w->gm->current_game];
+                if (game && game->active && !game->has_error && !game->error_dialog)
+                    send_input_to_game(w->gm, game, 1, k, pr, 0, 0);
+            }
+        }
+            pthread_mutex_unlock(&w->gm->fb_mutex);
+        }
+
+        const char* ok = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: keep-alive\r\n\r\nOK";
+        send_all(cf, ok, strlen(ok));
+    }
+    else {
+        const char* nf = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: keep-alive\r\n\r\n";
+        send_all(cf, nf, strlen(nf));
+    }
+}
+
+// One thread per keep-alive connection: a slow frame download never blocks
+// input requests or other clients (eliminates the "stuck after seconds" symptom).
+static void* web_conn_thread(void* arg) {
+    WConn* c = (WConn*)arg;
+    WebServer* w = c->w;
+    int cf = c->fd;
+    free(c);
+
+    unsigned char* buf = malloc(BASE_WINDOW_WIDTH * BASE_WINDOW_HEIGHT * 4);
+    if (!buf) { close(cf); return NULL; }
+
+    struct timeval to = {30, 0};
+    setsockopt(cf, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to));
+    int nd = 1;
+    setsockopt(cf, IPPROTO_TCP, TCP_NODELAY, &nd, sizeof(nd));
+
+    char req[16384];
+    while (w->run) {
+        int n = recv(cf, req, sizeof(req) - 1, 0);
+        if (n <= 0) break;
+        req[n] = 0;
+        web_handle_request(w, cf, buf, req);
+        if (strstr(req, "Connection: close")) break;
+    }
+
+    free(buf);
+    close(cf);
+    return NULL;
+}
+
 static void* wthread(void* a) {
     WebServer* w = (WebServer*)a;
     if (!w) return NULL;
-    
+
+    pthread_mutex_init(&w->cache_mutex, NULL);
+    w->cache = malloc(BASE_WINDOW_WIDTH * BASE_WINDOW_HEIGHT * 4);
+    w->cache_valid = 0;
+
     w->fd = socket(AF_INET, SOCK_STREAM, 0);
     int o = 1;
     setsockopt(w->fd, SOL_SOCKET, SO_REUSEADDR, &o, sizeof(o));
@@ -2479,7 +2721,7 @@ static void* wthread(void* a) {
     ad.sin_port = htons(WEB_PORT);
     
     bind(w->fd, (struct sockaddr*)&ad, sizeof(ad));
-    listen(w->fd, 10);
+    listen(w->fd, 64);
     
     printf("\n========================================\n");
     printf("  Web: http://localhost:%d\n", WEB_PORT);
@@ -2497,10 +2739,20 @@ static void* wthread(void* a) {
             socklen_t cl = sizeof(ca);
             int cf = accept(w->fd, (struct sockaddr*)&ca, &cl);
             if (cf >= 0) {
-                struct timeval to = {5, 0};
-                setsockopt(cf, SOL_SOCKET, SO_RCVTIMEO, &to, sizeof(to));
-                whandle(w, cf);
-                close(cf);
+                WConn* c = malloc(sizeof(WConn));
+                if (c) {
+                    c->w = w;
+                    c->fd = cf;
+                    pthread_t t;
+                    if (pthread_create(&t, NULL, web_conn_thread, c) == 0) {
+                        pthread_detach(t);
+                    } else {
+                        free(c);
+                        close(cf);
+                    }
+                } else {
+                    close(cf);
+                }
             }
         }
     }
