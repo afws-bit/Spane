@@ -152,64 +152,6 @@ install_x11_libs() {
     return 1
 }
 
-install_zenity() {
-    log_message "Checking zenity..."
-    
-    if command_exists zenity; then
-        log_message "✓ zenity already installed"
-        return 0
-    fi
-    
-    log_message "Installing zenity..."
-    local pkg_manager=$(detect_package_manager)
-    
-    case "$pkg_manager" in
-        apk)
-            if $SUDO apk add zenity 2>/dev/null; then
-                log_message "✓ zenity installed"
-                return 0
-            fi
-            ;;
-        apt-get)
-            if $SUDO apt-get update -y 2>/dev/null && $SUDO apt-get install -y zenity 2>/dev/null; then
-                log_message "✓ zenity installed"
-                return 0
-            fi
-            ;;
-        dnf)
-            if $SUDO dnf install -y zenity 2>/dev/null; then
-                log_message "✓ zenity installed"
-                return 0
-            fi
-            ;;
-        yum)
-            if $SUDO yum install -y zenity 2>/dev/null; then
-                log_message "✓ zenity installed"
-                return 0
-            fi
-            ;;
-        pacman)
-            if $SUDO pacman -S --noconfirm zenity 2>/dev/null; then
-                log_message "✓ zenity installed"
-                return 0
-            fi
-            ;;
-        zypper)
-            if $SUDO zypper install -y zenity 2>/dev/null; then
-                log_message "✓ zenity installed"
-                return 0
-            fi
-            ;;
-        *)
-            log_message "⚠ Could not install zenity - unknown package manager"
-            return 1
-            ;;
-    esac
-    
-    log_message "⚠ Failed to install zenity"
-    return 1
-}
-
 has_x11() {
     [ -f "/usr/include/X11/Xlib.h" ] || [ -f "/usr/local/include/X11/Xlib.h" ]
 }
@@ -622,7 +564,6 @@ cleanup() { rm -rf "$BUILD_DIR" 2>/dev/null; }
 
 run_update_flow() {
     install_build_tools
-    install_zenity
     
     if [ "$WEB_MODE" = false ]; then
         install_x11_libs
@@ -725,7 +666,6 @@ if [ -d "$INSTALL_DIR" ]; then
 fi
 
 install_build_tools
-install_zenity
 
 if [ "$WEB_MODE" = false ]; then
     install_x11_libs
